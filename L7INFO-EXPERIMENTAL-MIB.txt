@@ -1,0 +1,519 @@
+--  _    ___   ___  ___  ___                         --
+-- | |  | _ ) / _ \| _ \/ __|                        --
+-- | |__| _ \| (_) |   / (_ |                        --
+-- |____|___(_)___/|_|_\\___|                        --
+--       Loadbalancer.org Layer 7 Information MIB    --
+-- Copyright (c) 2020 Loadbalancer.org Ltd.          --
+--                                                   --
+-- 2020-05-18: Peter Statham: Improved descriptions. --
+-- 2020-04-13: Peter Statham: Initial release.       --
+--                                                   --
+
+L7INFO-EXPERIMENTAL-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+	MODULE-IDENTITY,
+	OBJECT-TYPE,
+	Integer32,
+	Unsigned32,
+	Counter32,
+	Gauge32
+				FROM SNMPv2-SMI
+	MODULE-COMPLIANCE,
+	OBJECT-GROUP
+				FROM SNMPv2-CONF
+	DisplayString,
+	TimeInterval,
+	TimeStamp
+				FROM SNMPv2-TC
+	lboExperimental
+				FROM LBO-MIB;
+
+l7Info MODULE-IDENTITY
+	LAST-UPDATED	"202004130000Z"
+	ORGANIZATION	"Loadbalancer.org Ltd."
+	CONTACT-INFO	"Loadbalancer.org Ltd.
+			 Compass House
+			 North Harbour Business Park
+			 Portsmouth, PO6 4PS
+			 England, UK
+
+			 +44 (0)330 380 1064
+			 snmp@loadbalancer.org"
+	DESCRIPTION	"Loadbalancer.org Layer 7 Information MIB -
+			 Providing information on the active HAProxy
+			 process."
+	REVISION	"202004130000Z"
+	DESCRIPTION	"Initial release."
+::= { lboExperimental 1 }
+
+l7InfoGroup OBJECT-GROUP
+	OBJECTS {
+		l7InfoLastPolled,
+		l7InfoUpdateInterval,
+		l7InfoLastError,
+		l7InfoName,
+		l7InfoVersion,
+		l7InfoReleaseDate,
+		l7InfoUptime,
+		l7InfoUptimeSec,
+		l7InfoNode,
+		l7InfoUlimitN,
+		l7InfoStopping,
+		l7InfoPid,
+		l7InfoProcessNum,
+		l7InfoNBThread,
+		l7InfoNBProc,
+		l7InfoSSLCacheMisses,
+		l7InfoSSLCacheLookups,
+		l7InfoCumSSLConns,
+		l7InfoCurrSSLConns,
+		l7InfoMaxSSLRate,
+		l7InfoMaxSSLConns,
+		l7InfoSSLRateLimit,
+		l7InfoSSLRate,
+		l7InfoSSLFrontendSessionReusePct,
+		l7InfoSSLFrontendMaxKeyRate,
+		l7InfoSSLFrontendKeyRate,
+		l7InfoSSLBackendMaxKeyRate,
+		l7InfoSSLBackendKeyRate,
+		l7InfoSessRateLimit,
+		l7InfoSessRate,
+		l7InfoMaxSessRate,
+		l7InfoMaxConnRate,
+		l7InfoMaxConn,
+		l7InfoCumConns,
+		l7InfoCumReq,
+		l7InfoCurrConns,
+		l7InfoConnRateLimit,
+		l7InfoConnRate,
+		l7InfoCompressBPSRateLim,
+		l7InfoCompressBPSOut,
+		l7InfoCompressBPSIn,
+		l7InfoZlibMemUsage,
+		l7InfoMaxZlibMemUsage,
+		l7InfoTasks,
+		l7InfoRunQueue,
+		l7InfoPoolUsedMB,
+		l7InfoPoolFailed,
+		l7InfoPoolAllocMB,
+		l7InfoPipesUsed,
+		l7InfoPipesFree,
+		l7InfoMemMaxMB,
+		l7InfoMaxSock,
+		l7InfoMaxPipes,
+		l7InfoListeners,
+		l7InfoJobs,
+		l7InfoIdlePct,
+		l7InfoHardMaxconn }
+	STATUS current
+	DESCRIPTION "Instances required for basic compliance."
+		::= { l7Info 65534 }
+
+l7InfoCompliance MODULE-COMPLIANCE
+	STATUS		current
+	DESCRIPTION	"The Experimental Layer 7 Info Profile."
+	MODULE		MANDATORY-GROUPS {
+				l7InfoGroup }
+		::= { l7Info 65535 }
+
+l7InfoLastPolled OBJECT-TYPE
+	SYNTAX		TimeStamp
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"The time the HAProxy process was last polled."
+		::= { l7Info 1 }
+
+l7InfoUpdateInterval OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"The interval between polling the HAProxy process."
+		::= { l7Info 2 }
+
+l7InfoLastError OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"The last error encountered when polling."
+		::= { l7Info 3 }
+
+l7InfoName OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Program internal name"
+		::= { l7Info 4 }
+
+l7InfoVersion OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Program version"
+		::= { l7Info 5 }
+
+l7InfoReleaseDate OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Program release date"
+		::= { l7Info 6 }
+
+l7InfoUptime OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Process uptime string"
+		::= { l7Info 7 }
+
+l7InfoUptimeSec OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Process uptime"
+		::= { l7Info 8 }
+
+l7InfoNode OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Node name"
+		::= { l7Info 9 }
+
+l7InfoUlimitN OBJECT-TYPE
+	SYNTAX		Integer32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Max open file descriptors"
+		::= { l7Info 10 }
+
+l7InfoStopping OBJECT-TYPE
+	SYNTAX		Integer32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Process stopping"
+		::= { l7Info 11 }
+
+l7InfoPid OBJECT-TYPE
+	SYNTAX		Integer32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Process id"
+		::= { l7Info 12 }
+
+l7InfoProcessNum OBJECT-TYPE
+	SYNTAX		Integer32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Process number"
+		::= { l7Info 13 }
+
+l7InfoNBThread OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Number of threads"
+		::= { l7Info 14 }
+
+l7InfoNBProc OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Number of processes"
+		::= { l7Info 15 }
+
+l7InfoSSLCacheMisses OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"SSL cache misses"
+		::= { l7Info 16 }
+
+l7InfoSSLCacheLookups OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"SSL cache lookups"
+		::= { l7Info 17 }
+
+l7InfoCumSSLConns OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak SSL connections"
+		::= { l7Info 18 }
+
+l7InfoCurrSSLConns OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"SSL connections at the time of the most recent polling"
+		::= { l7Info 19 }
+
+l7InfoMaxSSLRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak SSL connection rate"
+		::= { l7Info 20 }
+
+l7InfoMaxSSLConns OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak SSL connections"
+		::= { l7Info 21 }
+
+l7InfoSSLRateLimit OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Configured SSL connection rate limit"
+		::= { l7Info 22 }
+
+l7InfoSSLRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"SSL connections during the previous second"
+		::= { l7Info 23 }
+
+l7InfoSSLFrontendSessionReusePct OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Frontend SSL/TLS session reuse in percent"
+		::= { l7Info 24 }
+
+l7InfoSSLFrontendMaxKeyRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak frontend SSL/TLS connections processed rate"
+		::= { l7Info 25 }
+
+l7InfoSSLFrontendKeyRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"New frontend SSL/TLS connection processed rate"
+		::= { l7Info 26 }
+
+l7InfoSSLBackendMaxKeyRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak new backend SSL/TLS connections processed rate"
+		::= { l7Info 27 }
+
+l7InfoSSLBackendKeyRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"New backend SSL/TLS connection processed rate"
+		::= { l7Info 28 }
+
+l7InfoSessRateLimit OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Session rate limit"
+		::= { l7Info 29 }
+
+l7InfoSessRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Session rate"
+		::= { l7Info 30 }
+
+l7InfoMaxSessRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak session rate"
+		::= { l7Info 31 }
+
+l7InfoMaxConnRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Connection rate"
+		::= { l7Info 32 }
+
+l7InfoMaxConn OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak connection rate"
+		::= { l7Info 33 }
+
+l7InfoCumConns OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total connections"
+		::= { l7Info 34 }
+
+l7InfoCumReq OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total requests"
+		::= { l7Info 35 }
+
+l7InfoCurrConns OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Current connections at the time of the most recent polling"
+		::= { l7Info 36 }
+
+l7InfoConnRateLimit OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Configured connection rate limit"
+		::= { l7Info 37 }
+
+l7InfoConnRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Connections made during the previous second"
+		::= { l7Info 38 }
+
+l7InfoCompressBPSRateLim OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Configured compressed bytes rate limit"
+		::= { l7Info 39 }
+
+l7InfoCompressBPSOut OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Compressed bytes written"
+		::= { l7Info 40 }
+
+l7InfoCompressBPSIn OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Compressed bytes read"
+		::= { l7Info 41 }
+
+l7InfoZlibMemUsage OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"ZLib mem used"
+		::= { l7Info 42 }
+
+l7InfoMaxZlibMemUsage OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak ZLib mem used"
+		::= { l7Info 43 }
+
+l7InfoTasks OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total tasks"
+		::= { l7Info 44 }
+
+l7InfoRunQueue OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Run queue"
+		::= { l7Info 45 }
+
+l7InfoPoolUsedMB OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Pool mem used"
+		::= { l7Info 46 }
+
+l7InfoPoolFailed OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Pool failed"
+		::= { l7Info 47 }
+
+l7InfoPoolAllocMB OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Pool allocated memory"
+		::= { l7Info 48 }
+
+l7InfoPipesUsed OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Pipes used"
+		::= { l7Info 49 }
+
+l7InfoPipesFree OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Pipes free"
+		::= { l7Info 50 }
+
+l7InfoMemMaxMB OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak memory used"
+		::= { l7Info 51 }
+
+l7InfoMaxSock OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak sockets used"
+		::= { l7Info 52 }
+
+l7InfoMaxPipes OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak pipes used"
+		::= { l7Info 53 }
+
+l7InfoListeners OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Listener count"
+		::= { l7Info 54 }
+
+l7InfoJobs OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Job count"
+		::= { l7Info 55 }
+
+l7InfoIdlePct OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Idle percentage"
+		::= { l7Info 56 }
+
+l7InfoHardMaxconn OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Hard connections limit"
+		::= { l7Info 57 }
+
+END

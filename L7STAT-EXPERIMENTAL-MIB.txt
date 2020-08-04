@@ -1,0 +1,1655 @@
+--  _    ___   ___  ___  ___                                               --
+-- | |  | _ ) / _ \| _ \/ __|                                              --
+-- | |__| _ \| (_) |   / (_ |                                              --
+-- |____|___(_)___/|_|_\\___|                                              --
+--       Loadbalancer.org Layer 7 Statistics MIB                           --
+-- Copyright (c) 2020 Loadbalancer.org Ltd.                                --
+--                                                                         --
+-- 2020-05-13: Peter Statham: Improved descriptions                        --
+-- 2020-05-13: Peter Statham: Corrected data types for l7BeAct and l7BeBck --
+-- 2020-04-21: Peter Statham: Rewritten so HAProxy is the only dependency. --
+-- 2020-04-13: Peter Statham: Initial release.                             --
+--                                                                         --
+
+L7STAT-EXPERIMENTAL-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+	MODULE-IDENTITY,
+	OBJECT-TYPE,
+	Unsigned32,
+	Integer32,
+	Counter32,
+	Gauge32
+				FROM SNMPv2-SMI
+	MODULE-COMPLIANCE,
+	OBJECT-GROUP
+				FROM SNMPv2-CONF
+	TEXTUAL-CONVENTION,
+	DisplayString,
+	TimeInterval,
+	TimeStamp,
+	TruthValue
+				FROM SNMPv2-TC
+	InetAddress,
+	InetPortNumber,
+	InetAddressType
+				FROM INET-ADDRESS-MIB
+	lboExperimental
+				FROM LBO-MIB;
+
+l7Stat MODULE-IDENTITY
+	LAST-UPDATED	"202005130000Z"
+	ORGANIZATION	"Loadbalancer.org Ltd."
+	CONTACT-INFO	"Loadbalancer.org Ltd.
+			 Compass House
+			 North Harbour Business Park
+			 Portsmouth, PO6 4PS
+			 England, UK
+
+			 +44 (0)330 380 1064
+			 snmp@loadbalancer.org"
+
+	DESCRIPTION	"Loadbalancer.org Layer 7 Statistics MIB -
+			 Providing HAProxy's tables of statistics via SNMP."
+
+	REVISION	"202005130000Z"
+	DESCRIPTION	"Corrected data types for l7BeAct and l7BeBck."
+
+	REVISION	"202004210000Z"
+	DESCRIPTION	"Rewritten so HAProxy is the only dependency."
+
+	REVISION	"202004130000Z"
+	DESCRIPTION	"Initial release."
+		::= { lboExperimental 2 }
+
+l7StatGroup OBJECT-GROUP
+	OBJECTS {
+		l7StatLastError,
+		l7StatLastPolled,
+		l7StatUpdateInterval,
+		l7ProxyIid,
+		l7ProxyName,
+		l7FeIid,
+		l7FePxname,
+		l7FeStatus,
+		l7FeMode,
+		l7FeConnRate,
+		l7FeConnRateMax,
+		l7FeConnTot,
+		l7FeDcon,
+		l7FeScur,
+		l7FeSmax,
+		l7FeSlim,
+		l7FeStot,
+		l7FeDses,
+		l7FeRate,
+		l7FeRateMax,
+		l7FeRateLim,
+		l7FeDreq,
+		l7FeEreq,
+		l7FeReqRate,
+		l7FeReqRateMax,
+		l7FeReqTot,
+		l7FeDResp,
+		l7FeHRsp1xx,
+		l7FeHRsp2xx,
+		l7FeHRsp3xx,
+		l7FeHRsp4xx,
+		l7FeHRsp5xx,
+		l7FeHRspOther,
+		l7FeBin,
+		l7FeBout,
+		l7FeCompIn,
+		l7FeCompOut,
+		l7FeCompByp,
+		l7FeCompRsp,
+		l7FeIntercepted,
+		l7FePid,
+		l7BeIid,
+		l7BePxname,
+		l7BeStatus,
+		l7BeWeight,
+		l7BeMode,
+		l7BeCookie,
+		l7BeAlgo,
+		l7BeLastsess,
+		l7BeQtime,
+		l7BeCtime,
+		l7BeRtime,
+		l7BeTtime,
+		l7BeEcon,
+		l7BeWretr,
+		l7BeWredis,
+		l7BeScur,
+		l7BeSmax,
+		l7BeSlim,
+		l7BeStot,
+		l7BeRate,
+		l7BeRateMax,
+		l7BeDreq,
+		l7BeReqTot,
+		l7BeLbtot,
+		l7BeEresp,
+		l7BeDresp,
+		l7BeHrsp1xx,
+		l7BeHrsp2xx,
+		l7BeHrsp3xx,
+		l7BeHrsp4xx,
+		l7BeHrsp5xx,
+		l7BeHrspOther,
+		l7BeQcur,
+		l7BeQmax,
+		l7BeAct,
+		l7BeBck,
+		l7BeChkdown,
+		l7BeLastchg,
+		l7BeDowntime,
+		l7BeCliAbrt,
+		l7BeSrvAbrt,
+		l7BeBin,
+		l7BeBout,
+		l7BeCompIn,
+		l7BeCompOut,
+		l7BeCompByp,
+		l7BeCompRsp,
+		l7BeIntercepted,
+		l7SrvIid,
+		l7SrvSid,
+		l7SrvPxname,
+		l7SrvSvname,
+		l7SrvAddressType,
+		l7SrvAddressOctets,
+		l7SrvAddressPort,
+		l7SrvStatus,
+		l7SrvWeight,
+		l7SrvMode,
+		l7SrvCookie,
+		l7SrvEcon,
+		l7SrvWretr,
+		l7SrvWredis,
+		l7SrvScur,
+		l7SrvSmax,
+		l7SrvSlim,
+		l7SrvStot,
+		l7SrvLbtot,
+		l7SrvRate,
+		l7SrvRateMax,
+		l7SrvEresp,
+		l7SrvDresp,
+		l7SrvHrsp1xx,
+		l7SrvHrsp2xx,
+		l7SrvHrsp3xx,
+		l7SrvHrsp4xx,
+		l7SrvHrsp5xx,
+		l7SrvHrspOther,
+		l7SrvQcur,
+		l7SrvQmax,
+		l7SrvQlimit,
+		l7SrvBin,
+		l7SrvBout,
+		l7SrvThrottle,
+		l7SrvTracked,
+		l7SrvCliAbrt,
+		l7SrvSrvAbrt,
+		l7SrvLastsess,
+		l7SrvQtime,
+		l7SrvCtime,
+		l7SrvRtime,
+		l7SrvTtime,
+		l7SrvLastAgt,
+		l7SrvAgentStatus,
+		l7SrvAgentCode,
+		l7SrvAgentDuration,
+		l7SrvAgentDesc,
+		l7SrvAgentRise,
+		l7SrvAgentFall,
+		l7SrvAgentHealth,
+		l7SrvAct,
+		l7SrvBck,
+		l7SrvLastChk,
+		l7SrvCheckStatus,
+		l7SrvCheckCode,
+		l7SrvCheckDuration,
+		l7SrvCheckDesc,
+		l7SrvChkfail,
+		l7SrvChkdown,
+		l7SrvLastchg,
+		l7SrvDowntime,
+		l7SrvCheckRise,
+		l7SrvCheckFall,
+		l7SrvCheckHealth,
+		l7SrvHanafail,
+		l7SrvPid }
+	STATUS current
+	DESCRIPTION "Management objects defined in version 1."
+		::= { l7Stat 4294967293 }
+
+l7StatCompliance MODULE-COMPLIANCE
+	STATUS		current
+	DESCRIPTION	"Compliance requirements for basic support."
+	MODULE		MANDATORY-GROUPS {
+				l7StatGroup }
+		::= { l7Stat 4294967294 }
+
+l7StatLastPolled OBJECT-TYPE
+	SYNTAX		TimeStamp
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"The time the HAProxy process was last polled."
+		::= { l7Stat 1 }
+
+l7StatUpdateInterval OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"The interval between polling the HAProxy process."
+		::= { l7Stat 2 }
+
+l7StatLastError OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"The last error encountered when polling."
+		::= { l7Stat 3 }
+
+-- Textual Convention --
+
+L7Algorithm ::= TEXTUAL-CONVENTION
+	STATUS		current
+	DESCRIPTION	"The algorithm used to select a real server."
+	SYNTAX		INTEGER {
+				unknown(0),
+				leastConnections(1),
+				roundRobin(2) }
+
+L7Mode ::= TEXTUAL-CONVENTION
+	STATUS		current
+	DESCRIPTION	"The mode of a server, frontend or backend."
+	SYNTAX		INTEGER {
+				unknown(0),
+				tcp(1),
+				http(2),
+				health(3) }
+
+L7Status ::= TEXTUAL-CONVENTION
+	STATUS		current
+	DESCRIPTION	"The state of a server, frontend or backend."
+	SYNTAX		INTEGER {
+				unknown(0),
+				up(1),
+				noChk(2),
+				down(3),
+				nolb(4),
+				maint(5),
+				open(6) }
+
+L7HealthCheckStatus ::= TEXTUAL-CONVENTION
+	STATUS		current
+	DESCRIPTION	"The result of a health or agent check made by HAProxy."
+	SYNTAX		INTEGER {
+				unknown(0),
+				initializing(1),
+				noStatusChange(2),
+				healthAnalyze(3),
+				socketError(4),
+				layer4CheckPassed(5),
+				layer4Timeout(6),
+				layer4ConnectionProblem(7),
+				layer6CheckPassed(8),
+				layer6Timeout(9),
+				layer6InvalidResponse(10),
+				layer7Timeout(11),
+				layer7InvalidResponse(12),
+				layer7CheckPassed(13),
+				layer7CheckConditionallyPassed(14),
+				layer7WrongStatus(15),
+				externalCheckError(16),
+				externalCheckTimeout(17),
+				externalCheckPassed(18) }
+
+-- Proxy Table --
+
+l7ProxyTable OBJECT-TYPE
+	SYNTAX		SEQUENCE OF L7ProxyEntry
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"Layer 7 Poxies."
+		::= { l7Stat 4 }
+
+l7ProxyEntry OBJECT-TYPE
+	SYNTAX		L7ProxyEntry
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"An entry in the l7ProxyTable table."
+	INDEX		{ l7ProxyPxyIdx }
+		::= { l7ProxyTable 1 }
+
+L7ProxyEntry ::= SEQUENCE {
+	l7ProxyIid Unsigned32,
+	l7ProxyName DisplayString,
+	l7ProxyPxyIdx Unsigned32 }
+
+-- Frontend Table --
+
+l7FrontendTable OBJECT-TYPE
+	SYNTAX		SEQUENCE OF L7FrontendEntry
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"Layer 7 Frontends."
+		::= { l7Stat 5 }
+
+l7FrontendEntry OBJECT-TYPE
+	SYNTAX		L7FrontendEntry
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"An entry in the l7FrontendTable table."
+	INDEX		{ l7FePxyIdx }
+		::= { l7FrontendTable 1 }
+
+L7FrontendEntry ::= SEQUENCE {
+	l7FeIid Unsigned32,
+	l7FePxname DisplayString,
+	l7FeStatus L7Status,
+	l7FeMode L7Mode,
+	l7FeConnRate Gauge32,
+	l7FeConnRateMax Gauge32,
+	l7FeConnTot Counter32,
+	l7FeDcon Counter32,
+	l7FeScur Gauge32,
+	l7FeSmax Gauge32,
+	l7FeSlim Gauge32,
+	l7FeStot Counter32,
+	l7FeDses Counter32,
+	l7FeRate Gauge32,
+	l7FeRateMax Gauge32,
+	l7FeRateLim Gauge32,
+	l7FeDreq Counter32,
+	l7FeEreq Counter32,
+	l7FeReqRate Gauge32,
+	l7FeReqRateMax Gauge32,
+	l7FeReqTot Counter32,
+	l7FeDResp Counter32,
+	l7FeHRsp1xx Counter32,
+	l7FeHRsp2xx Counter32,
+	l7FeHRsp3xx Counter32,
+	l7FeHRsp4xx Counter32,
+	l7FeHRsp5xx Counter32,
+	l7FeHRspOther Counter32,
+	l7FeBin Counter32,
+	l7FeBout Counter32,
+	l7FeCompIn Counter32,
+	l7FeCompOut Counter32,
+	l7FeCompByp Counter32,
+	l7FeCompRsp Counter32,
+	l7FeIntercepted Counter32,
+	l7FePid Unsigned32,
+	l7FePxyIdx Unsigned32 }
+
+-- Backend Table --
+
+l7BackendTable OBJECT-TYPE
+	SYNTAX		SEQUENCE OF L7BackendEntry
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"Layer 7 Backends."
+		::= { l7Stat 6 }
+
+l7BackendEntry OBJECT-TYPE
+	SYNTAX		L7BackendEntry
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"An entry in the l7BackendTable table."
+	INDEX		{ l7BePxyIdx }
+		::= { l7BackendTable 1 }
+
+L7BackendEntry ::= SEQUENCE {
+	l7BeIid Unsigned32,
+	l7BePxname DisplayString,
+	l7BeStatus L7Status,
+	l7BeWeight Gauge32,
+	l7BeMode L7Mode,
+	l7BeCookie DisplayString,
+	l7BeAlgo L7Algorithm,
+	l7BeLastsess TimeInterval,
+	l7BeQtime TimeInterval,
+	l7BeCtime TimeInterval,
+	l7BeRtime TimeInterval,
+	l7BeTtime TimeInterval,
+	l7BeEcon Counter32,
+	l7BeWretr Counter32,
+	l7BeWredis Counter32,
+	l7BeScur Gauge32,
+	l7BeSmax Gauge32,
+	l7BeSlim Gauge32,
+	l7BeStot Counter32,
+	l7BeRate Gauge32,
+	l7BeRateMax Gauge32,
+	l7BeDreq Counter32,
+	l7BeReqTot Counter32,
+	l7BeLbtot Counter32,
+	l7BeEresp Counter32,
+	l7BeDresp Counter32,
+	l7BeHrsp1xx Counter32,
+	l7BeHrsp2xx Counter32,
+	l7BeHrsp3xx Counter32,
+	l7BeHrsp4xx Counter32,
+	l7BeHrsp5xx Counter32,
+	l7BeHrspOther Counter32,
+	l7BeQcur Counter32,
+	l7BeQmax Gauge32,
+	l7BeAct Gauge32,
+	l7BeBck Gauge32,
+	l7BeChkdown Counter32,
+	l7BeLastchg TimeInterval,
+	l7BeDowntime TimeInterval,
+	l7BeCliAbrt Counter32,
+	l7BeSrvAbrt Counter32,
+	l7BeBin Counter32,
+	l7BeBout Counter32,
+	l7BeCompIn Counter32,
+	l7BeCompOut Counter32,
+	l7BeCompByp Counter32,
+	l7BeCompRsp Counter32,
+	l7BeIntercepted Counter32,
+	l7BePxyIdx Unsigned32 }
+
+-- ServerTable --
+
+l7ServerTable OBJECT-TYPE
+	SYNTAX		SEQUENCE OF L7ServerEntry
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"Layer 7 Servers."
+		::= { l7Stat 7 }
+
+l7ServerEntry OBJECT-TYPE
+	SYNTAX		L7ServerEntry
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"An entry in the l7ServerTable table."
+	INDEX		{ l7SrvPxyIdx, l7SrvSrvIdx }
+		::= { l7ServerTable 1 }
+
+L7ServerEntry ::= SEQUENCE {
+	l7SrvIid Unsigned32,
+	l7SrvSid Unsigned32,
+	l7SrvPxname DisplayString,
+	l7SrvSvname DisplayString,
+	l7SrvAddressType InetAddressType,
+	l7SrvAddressOctets InetAddress,
+	l7SrvAddressPort InetPortNumber,
+	l7SrvStatus L7Status,
+	l7SrvWeight Unsigned32,
+	l7SrvMode L7Mode,
+	l7SrvCookie DisplayString,
+	l7SrvEcon Counter32,
+	l7SrvWretr Counter32,
+	l7SrvWredis Counter32,
+	l7SrvScur Gauge32,
+	l7SrvSmax Gauge32,
+	l7SrvSlim Gauge32,
+	l7SrvStot Counter32,
+	l7SrvLbtot Counter32,
+	l7SrvRate Gauge32,
+	l7SrvRateMax Gauge32,
+	l7SrvEresp Counter32,
+	l7SrvDresp Counter32,
+	l7SrvHrsp1xx Counter32,
+	l7SrvHrsp2xx Counter32,
+	l7SrvHrsp3xx Counter32,
+	l7SrvHrsp4xx Counter32,
+	l7SrvHrsp5xx Counter32,
+	l7SrvHrspOther Counter32,
+	l7SrvQcur Gauge32,
+	l7SrvQmax Gauge32,
+	l7SrvQlimit Gauge32,
+	l7SrvBin Counter32,
+	l7SrvBout Counter32,
+	l7SrvThrottle Gauge32,
+	l7SrvTracked Integer32,
+	l7SrvCliAbrt Counter32,
+	l7SrvSrvAbrt Counter32,
+	l7SrvLastsess TimeInterval,
+	l7SrvQtime TimeInterval,
+	l7SrvCtime TimeInterval,
+	l7SrvRtime TimeInterval,
+	l7SrvTtime TimeInterval,
+	l7SrvLastAgt DisplayString,
+	l7SrvAgentStatus L7HealthCheckStatus,
+	l7SrvAgentCode Unsigned32,
+	l7SrvAgentDuration TimeInterval,
+	l7SrvAgentDesc DisplayString,
+	l7SrvAgentRise Unsigned32,
+	l7SrvAgentFall Unsigned32,
+	l7SrvAgentHealth Unsigned32,
+	l7SrvAct TruthValue,
+	l7SrvBck TruthValue,
+	l7SrvLastChk DisplayString,
+	l7SrvCheckStatus L7HealthCheckStatus,
+	l7SrvCheckCode Integer32,
+	l7SrvCheckDuration TimeInterval,
+	l7SrvCheckDesc DisplayString,
+	l7SrvChkfail Counter32,
+	l7SrvChkdown Counter32,
+	l7SrvLastchg TimeInterval,
+	l7SrvDowntime TimeInterval,
+	l7SrvCheckRise Unsigned32,
+	l7SrvCheckFall Unsigned32,
+	l7SrvCheckHealth Unsigned32,
+	l7SrvHanafail INTEGER,
+	l7SrvPid Unsigned32,
+	l7SrvPxyIdx Unsigned32,
+	l7SrvSrvIdx Unsigned32 }
+
+-- Table Fields --
+
+l7ProxyIid OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Unique proxy id"
+		::= { l7ProxyEntry 1 }
+
+l7ProxyName OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Proxy name"
+		::= { l7ProxyEntry 2 }
+
+l7ProxyPxyIdx OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"Unique proxy id"
+		::= { l7ProxyEntry 4294967294 }
+
+
+l7FeIid OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Unique proxy id"
+		::= { l7FrontendEntry 1 }
+
+l7FePxname OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Proxy name"
+		::= { l7FrontendEntry 2 }
+
+l7FeStatus OBJECT-TYPE
+	SYNTAX		L7Status
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Frontend status"
+		::= { l7FrontendEntry 3 }
+
+l7FeMode OBJECT-TYPE
+	SYNTAX		L7Mode
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Frontend mode"
+		::= { l7FrontendEntry 4 }
+
+l7FeConnRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Connections during the previous second"
+		::= { l7FrontendEntry 5 }
+
+l7FeConnRateMax OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak connection rate"
+		::= { l7FrontendEntry 6 }
+
+l7FeConnTot OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total connections made"
+		::= { l7FrontendEntry 7 }
+
+l7FeDcon OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Requests denied by 'tcp-request connection' rules"
+		::= { l7FrontendEntry 8 }
+
+l7FeScur OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Current sessions at the time of the most recent polling"
+		::= { l7FrontendEntry 9 }
+
+l7FeSmax OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak current sessions"
+		::= { l7FrontendEntry 10 }
+
+l7FeSlim OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Configured session limit"
+		::= { l7FrontendEntry 11 }
+
+l7FeStot OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total sessions served"
+		::= { l7FrontendEntry 12 }
+
+l7FeDses OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Requests denied by 'tcp-request session' rules"
+		::= { l7FrontendEntry 13 }
+
+l7FeRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Sessions during the previous second"
+		::= { l7FrontendEntry 14 }
+
+l7FeRateMax OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak session rate"
+		::= { l7FrontendEntry 15 }
+
+l7FeRateLim OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Configured session rate limit"
+		::= { l7FrontendEntry 16 }
+
+l7FeDreq OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Requests denied"
+		::= { l7FrontendEntry 17 }
+
+l7FeEreq OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Requests with errors"
+		::= { l7FrontendEntry 18 }
+
+l7FeReqRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Requests during the previous second"
+		::= { l7FrontendEntry 19 }
+
+l7FeReqRateMax OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak request rate"
+		::= { l7FrontendEntry 20 }
+
+l7FeReqTot OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total requests"
+		::= { l7FrontendEntry 21 }
+
+l7FeDResp OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses denied"
+		::= { l7FrontendEntry 22 }
+
+l7FeHRsp1xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 100 range"
+		::= { l7FrontendEntry 23 }
+
+l7FeHRsp2xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 200 range"
+		::= { l7FrontendEntry 24 }
+
+l7FeHRsp3xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 300 range"
+		::= { l7FrontendEntry 25 }
+
+l7FeHRsp4xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 400 range"
+		::= { l7FrontendEntry 26 }
+
+l7FeHRsp5xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 500 range"
+		::= { l7FrontendEntry 27 }
+
+l7FeHRspOther OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with other statuses"
+		::= { l7FrontendEntry 28 }
+
+l7FeBin OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Bytes read"
+		::= { l7FrontendEntry 29 }
+
+l7FeBout OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Bytes written"
+		::= { l7FrontendEntry 30 }
+
+l7FeCompIn OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Compressed bytes read"
+		::= { l7FrontendEntry 31 }
+
+l7FeCompOut OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Compressed bytes written"
+		::= { l7FrontendEntry 32 }
+
+l7FeCompByp OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Bytes that bypassed the compressor"
+		::= { l7FrontendEntry 33 }
+
+l7FeCompRsp OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"HTTP responses that were compressed"
+		::= { l7FrontendEntry 34 }
+
+l7FeIntercepted OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Intercepted requests"
+		::= { l7FrontendEntry 35 }
+
+l7FePid OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Owning process"
+		::= { l7FrontendEntry 36 }
+
+l7FePxyIdx OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"Unique proxy id"
+		::= { l7FrontendEntry 4294967294 }
+
+
+l7BeIid OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Unique proxy id"
+		::= { l7BackendEntry 1 }
+
+l7BePxname OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Proxy Name"
+		::= { l7BackendEntry 2 }
+
+l7BeStatus OBJECT-TYPE
+	SYNTAX		L7Status
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Backend status"
+		::= { l7BackendEntry 3 }
+
+l7BeWeight OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Combined weight of servers"
+		::= { l7BackendEntry 4 }
+
+l7BeMode OBJECT-TYPE
+	SYNTAX		L7Mode
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Backend mode"
+		::= { l7BackendEntry 5 }
+
+l7BeCookie OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Name of persistance cookie"
+		::= { l7BackendEntry 6 }
+
+l7BeAlgo OBJECT-TYPE
+	SYNTAX		L7Algorithm
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Load balancing algorithm"
+		::= { l7BackendEntry 7 }
+
+l7BeLastsess OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Time since last session"
+		::= { l7BackendEntry 8 }
+
+l7BeQtime OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Average queue time for previous 1024 requests"
+		::= { l7BackendEntry 9 }
+
+l7BeCtime OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Average connect time for previous 1024 requests"
+		::= { l7BackendEntry 10 }
+
+l7BeRtime OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Average response time for previous 1024 requests"
+		::= { l7BackendEntry 11 }
+
+l7BeTtime OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Average total session time for previous 1024 requests"
+		::= { l7BackendEntry 12 }
+
+l7BeEcon OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Connection errors"
+		::= { l7BackendEntry 13 }
+
+l7BeWretr OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Retries"
+		::= { l7BackendEntry 14 }
+
+l7BeWredis OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Redispatches"
+		::= { l7BackendEntry 15 }
+
+l7BeScur OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Current sessions at the time of the most recent polling"
+		::= { l7BackendEntry 16 }
+
+l7BeSmax OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak current sessions"
+		::= { l7BackendEntry 17 }
+
+l7BeSlim OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Configured session limit"
+		::= { l7BackendEntry 18 }
+
+l7BeStot OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total sessions served"
+		::= { l7BackendEntry 19 }
+
+l7BeRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Sessions during the previous second"
+		::= { l7BackendEntry 20 }
+
+l7BeRateMax OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak session rate"
+		::= { l7BackendEntry 21 }
+
+l7BeDreq OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Denied requests"
+		::= { l7BackendEntry 22 }
+
+l7BeReqTot OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total HTTP requests"
+		::= { l7BackendEntry 23 }
+
+l7BeLbtot OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total HTTP requests serviced"
+		::= { l7BackendEntry 24 }
+
+l7BeEresp OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Error responses"
+		::= { l7BackendEntry 25 }
+
+l7BeDresp OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Denied responses"
+		::= { l7BackendEntry 26 }
+
+l7BeHrsp1xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 100 range"
+		::= { l7BackendEntry 27 }
+
+l7BeHrsp2xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 200 range"
+		::= { l7BackendEntry 28 }
+
+l7BeHrsp3xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 300 range"
+		::= { l7BackendEntry 29 }
+
+l7BeHrsp4xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 400 range"
+		::= { l7BackendEntry 30 }
+
+l7BeHrsp5xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 500 range"
+		::= { l7BackendEntry 31 }
+
+l7BeHrspOther OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with other statuses"
+		::= { l7BackendEntry 32 }
+
+l7BeQcur OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Requests queued at the time of the most recent polling"
+		::= { l7BackendEntry 33 }
+
+l7BeQmax OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak requests queued"
+		::= { l7BackendEntry 34 }
+
+l7BeAct OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total active servers"
+		::= { l7BackendEntry 35 }
+
+l7BeBck OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total backup servers"
+		::= { l7BackendEntry 36 }
+
+l7BeChkdown OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Transitions to down state"
+		::= { l7BackendEntry 37 }
+
+l7BeLastchg OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Time since last transition to down state"
+		::= { l7BackendEntry 38 }
+
+l7BeDowntime OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Time spent in down state"
+		::= { l7BackendEntry 39 }
+
+l7BeCliAbrt OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total transfers aborted by client"
+		::= { l7BackendEntry 40 }
+
+l7BeSrvAbrt OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total transfers aborted by server"
+		::= { l7BackendEntry 41 }
+
+l7BeBin OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Bytes read"
+		::= { l7BackendEntry 42 }
+
+l7BeBout OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Bytes written"
+		::= { l7BackendEntry 43 }
+
+l7BeCompIn OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Compressed bytes read"
+		::= { l7BackendEntry 44 }
+
+l7BeCompOut OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Compressed bytes written"
+		::= { l7BackendEntry 45 }
+
+l7BeCompByp OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Bytes that bypassed the compressor"
+		::= { l7BackendEntry 46 }
+
+l7BeCompRsp OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"HTTP responses that were compressed"
+		::= { l7BackendEntry 47 }
+
+l7BeIntercepted OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Intercepted requests"
+		::= { l7BackendEntry 48 }
+
+l7BePxyIdx OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"Unique proxy id"
+		::= { l7BackendEntry 4294967294 }
+
+
+l7SrvIid OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Unique proxy id"
+		::= { l7ServerEntry 1 }
+
+l7SrvSid OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Unique server id"
+		::= { l7ServerEntry 2 }
+
+l7SrvPxname OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Proxy Name"
+		::= { l7ServerEntry 3 }
+
+l7SrvSvname OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Server Name"
+		::= { l7ServerEntry 4 }
+
+l7SrvAddressType OBJECT-TYPE
+	SYNTAX		InetAddressType
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Server address type"
+		::= { l7ServerEntry 5 }
+
+l7SrvAddressOctets OBJECT-TYPE
+	SYNTAX		InetAddress
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Server address"
+		::= { l7ServerEntry 6 }
+
+l7SrvAddressPort OBJECT-TYPE
+	SYNTAX		InetPortNumber
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Server port"
+		::= { l7ServerEntry 7 }
+
+l7SrvStatus OBJECT-TYPE
+	SYNTAX		L7Status
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"The status of the server"
+		::= { l7ServerEntry 8 }
+
+l7SrvWeight OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Weight"
+		::= { l7ServerEntry 9 }
+
+l7SrvMode OBJECT-TYPE
+	SYNTAX		L7Mode
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Server mode"
+		::= { l7ServerEntry 10 }
+
+l7SrvCookie OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Cookie value"
+		::= { l7ServerEntry 11 }
+
+l7SrvEcon OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Connection errors"
+		::= { l7ServerEntry 12 }
+
+l7SrvWretr OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Retries"
+		::= { l7ServerEntry 13 }
+
+l7SrvWredis OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Redispatches"
+		::= { l7ServerEntry 14 }
+
+l7SrvScur OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Current sessions at the time of the most recent polling"
+		::= { l7ServerEntry 15 }
+
+l7SrvSmax OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak current sessions"
+		::= { l7ServerEntry 16 }
+
+l7SrvSlim OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Configured session limit"
+		::= { l7ServerEntry 17 }
+
+l7SrvStot OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Sessions total"
+		::= { l7ServerEntry 18 }
+
+l7SrvLbtot OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total HTTP requests serviced"
+		::= { l7ServerEntry 19 }
+
+l7SrvRate OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Sessions during the previous second"
+		::= { l7ServerEntry 20 }
+
+l7SrvRateMax OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak session rate"
+		::= { l7ServerEntry 21 }
+
+l7SrvEresp OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Error responses"
+		::= { l7ServerEntry 22 }
+
+l7SrvDresp OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Denied requests"
+		::= { l7ServerEntry 23 }
+
+l7SrvHrsp1xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 100 range"
+		::= { l7ServerEntry 24 }
+
+l7SrvHrsp2xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 200 range"
+		::= { l7ServerEntry 25 }
+
+l7SrvHrsp3xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 300 range"
+		::= { l7ServerEntry 26 }
+
+l7SrvHrsp4xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 400 range"
+		::= { l7ServerEntry 27 }
+
+l7SrvHrsp5xx OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with statuses in the 500 range"
+		::= { l7ServerEntry 28 }
+
+l7SrvHrspOther OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Responses with other statuses"
+		::= { l7ServerEntry 29 }
+
+l7SrvQcur OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Requests enqueued at the time of the most recent polling"
+		::= { l7ServerEntry 30 }
+
+l7SrvQmax OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Peak requests queued"
+		::= { l7ServerEntry 31 }
+
+l7SrvQlimit OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Configured request queue limit"
+		::= { l7ServerEntry 32 }
+
+l7SrvBin OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Bytes read"
+		::= { l7ServerEntry 33 }
+
+l7SrvBout OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Bytes written"
+		::= { l7ServerEntry 34 }
+
+l7SrvThrottle OBJECT-TYPE
+	SYNTAX		Gauge32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Slow-start throttle percentage"
+		::= { l7ServerEntry 35 }
+
+l7SrvTracked OBJECT-TYPE
+	SYNTAX		Integer32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Tracking id"
+		::= { l7ServerEntry 36 }
+
+l7SrvCliAbrt OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Transfers aborted by client"
+		::= { l7ServerEntry 37 }
+
+l7SrvSrvAbrt OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Transfers aborted by server"
+		::= { l7ServerEntry 38 }
+
+l7SrvLastsess OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Time since last session"
+		::= { l7ServerEntry 39 }
+
+l7SrvQtime OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Average queue time for previous 1024 requests"
+		::= { l7ServerEntry 40 }
+
+l7SrvCtime OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Average connect time for previous 1024 requests"
+		::= { l7ServerEntry 41 }
+
+l7SrvRtime OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Average response time for previous 1024 requests"
+		::= { l7ServerEntry 42 }
+
+l7SrvTtime OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Average total session time for previous 1024 requests"
+		::= { l7ServerEntry 43 }
+
+l7SrvLastAgt OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Time since last agent check"
+		::= { l7ServerEntry 44 }
+
+l7SrvAgentStatus OBJECT-TYPE
+	SYNTAX		L7HealthCheckStatus
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Status of last agent check"
+		::= { l7ServerEntry 45 }
+
+l7SrvAgentCode OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Code returned last agent check"
+		::= { l7ServerEntry 46 }
+
+l7SrvAgentDuration OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Duration of last agent check"
+		::= { l7ServerEntry 47 }
+
+l7SrvAgentDesc OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Description of last agent check"
+		::= { l7ServerEntry 48 }
+
+l7SrvAgentRise OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Agent pass rise count"
+		::= { l7ServerEntry 49 }
+
+l7SrvAgentFall OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Agent fail fall count"
+		::= { l7ServerEntry 50 }
+
+l7SrvAgentHealth OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Agent health"
+		::= { l7ServerEntry 51 }
+
+l7SrvAct OBJECT-TYPE
+	SYNTAX		TruthValue
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Server is active"
+		::= { l7ServerEntry 52 }
+
+l7SrvBck OBJECT-TYPE
+	SYNTAX		TruthValue
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Server is part of the backup pool"
+		::= { l7ServerEntry 53 }
+
+l7SrvLastChk OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Time since last health check"
+		::= { l7ServerEntry 54 }
+
+l7SrvCheckStatus OBJECT-TYPE
+	SYNTAX		L7HealthCheckStatus
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Status of last health check"
+		::= { l7ServerEntry 55 }
+
+l7SrvCheckCode OBJECT-TYPE
+	SYNTAX		Integer32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Code of last health check"
+		::= { l7ServerEntry 56 }
+
+l7SrvCheckDuration OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Duration of last health check"
+		::= { l7ServerEntry 57 }
+
+l7SrvCheckDesc OBJECT-TYPE
+	SYNTAX		DisplayString
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Description of last health check"
+		::= { l7ServerEntry 58 }
+
+l7SrvChkfail OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Health check fails"
+		::= { l7ServerEntry 59 }
+
+l7SrvChkdown OBJECT-TYPE
+	SYNTAX		Counter32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Transitions to down state"
+		::= { l7ServerEntry 60 }
+
+l7SrvLastchg OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Time since the last transition to down state"
+		::= { l7ServerEntry 61 }
+
+l7SrvDowntime OBJECT-TYPE
+	SYNTAX		TimeInterval
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Total downtime"
+		::= { l7ServerEntry 62 }
+
+l7SrvCheckRise OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Health check pass rise count"
+		::= { l7ServerEntry 63 }
+
+l7SrvCheckFall OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Health check fall fail count"
+		::= { l7ServerEntry 64 }
+
+l7SrvCheckHealth OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Health checks passed"
+		::= { l7ServerEntry 65 }
+
+l7SrvHanafail OBJECT-TYPE
+	SYNTAX		Integer32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Failed health check details"
+		::= { l7ServerEntry 66 }
+
+l7SrvPid OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	read-only
+	STATUS		current
+	DESCRIPTION	"Owning process"
+		::= { l7ServerEntry 67 }
+
+l7SrvPxyIdx OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"Unique proxy id"
+		::= { l7ServerEntry 4294967293 }
+
+l7SrvSrvIdx OBJECT-TYPE
+	SYNTAX		Unsigned32
+	MAX-ACCESS	not-accessible
+	STATUS		current
+	DESCRIPTION	"Unique Server id"
+		::= { l7ServerEntry 4294967294 }
+
+END

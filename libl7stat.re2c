@@ -1,0 +1,3255 @@
+/*
+ *  _    ___   ___  ___  ___
+ * | |  | _ ) / _ \| _ \/ __|
+ * | |__| _ \| (_) |   / (_ |
+ * |____|___(_)___/|_|_\\___|
+ *       Loadbalancer.org Layer 7 Statistics Agent
+ * Copyright (c) 2020 Loadbalancer.org Ltd.
+ *
+ * 2020-04-13: Peter Statham: Initial release.
+ *
+ */
+
+/*
+ * TODO:
+ *   + Switch to using Counter64/Integer64/et al.
+ *   + Comment/Document Code
+ *   + Try to enumerate all the values field 17 can take; the
+ *     HAProxy documentation is wrong.
+ *   + Try to figure out the correct way to have the cache helper
+ *     handle an entire subtree
+ *   + Review Debug tokens
+ */
+
+// 1. Preamble ////////////////////////////////////////////////////////
+
+// Includes
+#include <net-snmp/net-snmp-config.h>
+#include <net-snmp/net-snmp-includes.h>
+#include <net-snmp/agent/net-snmp-agent-includes.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
+// Error Codes
+#define ERR_OKAY			0
+#define ERR_CANNOT_CONNECT_SOCKET	1
+#define ERR_CANNOT_CONNECT_CONNECT	2
+#define ERR_EOF				3
+#define ERR_IO				4
+#define ERR_UNABLE_TO_READ_XML		5
+#define ERR_UNABLE_TO_STAT_XML		6
+#define ERR_EXPECTED_COMMA		7
+#define ERR_EXPECTED_EOL		8
+#define ERR_INVALID_TYPE		9
+
+// Macros
+#define L7STAT_ERROR(x) \
+	last_error = x; \
+	DEBUGMSGTL(("l7stat:error", "%s:%d: error %d.\n", __func__, __LINE__, x));
+
+#define YYCTYPE		char
+#define YYMARKER	marker
+#define YYCURSOR	cursor
+#define YYLIMIT		limit
+#define YYFILL(x)	yyfill (x, fd, &token, &marker, &cursor, &limit)
+
+#define PARSER_STATE_DECL     int fd, char  *token,   char  *marker,   char  *cursor,   char  *limit
+#define PARSER_STATE_PTR_DECL int fd, char **p_token, char **p_marker, char **p_cursor, char **p_limit
+#define PARSER_STATE_PTRS         fd,       &token,         &marker,         &cursor,         &limit
+#define PARSER_STATE              fd,        token,          marker,          cursor,          limit
+
+#define GET_UNSIGNED(x) l7stat_parse_signed_integer (x, PARSER_STATE_PTRS)
+#define GET_OCTET_STR(x) l7stat_parse_string (x, PARSER_STATE_PTRS)
+
+#define SEND_UNSIGNED(x) snmp_set_var_typed_integer (req->requestvb, ASN_UNSIGNED, x)
+#define SEND_TIMESTAMP_SEC(x) snmp_set_var_typed_integer (req->requestvb, ASN_TIMETICKS, x*1000)
+#define SEND_TIMEINTERVAL_SEC(x) snmp_set_var_typed_integer (req->requestvb, ASN_INTEGER, x*100)
+#define SEND_INTEGER(x) snmp_set_var_typed_integer (req->requestvb, ASN_INTEGER, x)
+#define SEND_COUNTER(x) snmp_set_var_typed_integer (req->requestvb, ASN_COUNTER, x)
+#define SEND_OCTET_STR(x, l) snmp_set_var_typed_value (req->requestvb, ASN_OCTET_STR, x, l)
+
+// Fields output by show stat
+#define FIELD_PXNAME		 0
+#define FIELD_SVNAME		 1
+#define FIELD_QCUR		 2
+#define FIELD_QMAX		 3
+#define FIELD_SCUR		 4
+#define FIELD_SMAX		 5
+#define FIELD_SLIM		 6
+#define FIELD_STOT		 7
+#define FIELD_BIN		 8
+#define FIELD_BOUT		 9
+#define FIELD_DREQ		10
+#define FIELD_DRESP		11
+#define FIELD_EREQ		12
+#define FIELD_ECON		13
+#define FIELD_ERESP		14
+#define FIELD_WRETR		15
+#define FIELD_WREDIS		16
+#define FIELD_STATUS		17
+#define FIELD_WEIGHT		18
+#define FIELD_ACT		19
+#define FIELD_BCK		20
+#define FIELD_CHKFAIL		21
+#define FIELD_CHKDOWN		22
+#define FIELD_LASTCHG		23
+#define FIELD_DOWNTIME		24
+#define FIELD_QLIMIT		25
+#define FIELD_PID		26
+#define FIELD_IID		27
+#define FIELD_SID		28
+#define FIELD_THROTTLE		29
+#define FIELD_LBTOT		30
+#define FIELD_TRACKED		31
+#define FIELD_TYPE		32
+#define FIELD_RATE		33
+#define FIELD_RATE_LIM		34
+#define FIELD_RATE_MAX		35
+#define FIELD_CHECK_STATUS	36
+#define FIELD_CHECK_CODE	37
+#define FIELD_CHECK_DURATION	38
+#define FIELD_HRSP_1XX		39
+#define FIELD_HRSP_2XX		40
+#define FIELD_HRSP_3XX		41
+#define FIELD_HRSP_4XX		42
+#define FIELD_HRSP_5XX		43
+#define FIELD_HRSP_OTHER	44
+#define FIELD_HANAFAIL		45
+#define FIELD_REQ_RATE		46
+#define FIELD_REQ_RATE_MAX	47
+#define FIELD_REQ_TOT		48
+#define FIELD_CLI_ABRT		49
+#define FIELD_SRV_ABRT		50
+#define FIELD_COMP_IN		51
+#define FIELD_COMP_OUT		52
+#define FIELD_COMP_BYP		53
+#define FIELD_COMP_RSP		54
+#define FIELD_LASTSESS		55
+#define FIELD_LAST_CHK		56
+#define FIELD_LAST_AGT		57
+#define FIELD_QTIME		58
+#define FIELD_CTIME		59
+#define FIELD_RTIME		60
+#define FIELD_TTIME		61
+#define FIELD_AGENT_STATUS	62
+#define FIELD_AGENT_CODE	63
+#define FIELD_AGENT_DURATION	64
+#define FIELD_CHECK_DESC	65
+#define FIELD_AGENT_DESC	66
+#define FIELD_CHECK_RISE	67
+#define FIELD_CHECK_FALL	68
+#define FIELD_CHECK_HEALTH	69
+#define FIELD_AGENT_RISE	70
+#define FIELD_AGENT_FALL	71
+#define FIELD_AGENT_HEALTH	72
+#define FIELD_ADDRESS		73
+#define FIELD_COOKIE		74
+#define FIELD_MODE		75
+#define FIELD_ALGO		76
+#define FIELD_CONN_RATE		77
+#define FIELD_CONN_RATE_MAX	78
+#define FIELD_CONN_TOT		79
+#define FIELD_INTERCEPTED	80
+#define FIELD_DCON		81
+#define FIELD_DSES		82
+#define FIELD_83		83
+
+
+// Scalar OIDs
+#define SCALAR_LAST_UPDATED	1
+#define SCALAR_UPDATE_INTERVAL	2
+#define SCALAR_LAST_ERROR	3
+
+
+// OIDs in l7ProxyTable
+#define PROXY_IID	1
+#define PROXY_PXNAME	2
+
+// OIDs in l7FrontendTable
+#define FRONTEND_IID		 1
+#define FRONTEND_PXNAME		 2
+#define FRONTEND_STATUS		 3
+#define FRONTEND_MODE		 4
+#define FRONTEND_CONN_RATE	 5
+#define FRONTEND_CONN_RATE_MAX	 6
+#define FRONTEND_CONN_TOT	 7
+#define FRONTEND_DCON		 8
+#define FRONTEND_SCUR		 9
+#define FRONTEND_SMAX		10
+#define FRONTEND_SLIM		11
+#define FRONTEND_STOT		12
+#define FRONTEND_DSES		13
+#define FRONTEND_RATE		14
+#define FRONTEND_RATE_MAX	15
+#define FRONTEND_RATE_LIM	16
+#define FRONTEND_DREQ		17
+#define FRONTEND_EREQ		18
+#define FRONTEND_REQ_RATE	19
+#define FRONTEND_REQ_RATE_MAX	20
+#define FRONTEND_REQ_TOT	21
+#define FRONTEND_DRESP		22
+#define FRONTEND_HRSP_1XX	23
+#define FRONTEND_HRSP_2XX	24
+#define FRONTEND_HRSP_3XX	25
+#define FRONTEND_HRSP_4XX	26
+#define FRONTEND_HRSP_5XX	27
+#define FRONTEND_HRSP_OTHER	28
+#define FRONTEND_BIN		29
+#define FRONTEND_BOUT		30
+#define FRONTEND_COMP_IN	31
+#define FRONTEND_COMP_OUT	32
+#define FRONTEND_COMP_BYP	33
+#define FRONTEND_COMP_RSP	34
+#define FRONTEND_INTERCEPTED	35
+#define FRONTEND_PID		36
+
+// OIDs in l7BackendTable
+#define BACKEND_IID		 1
+#define BACKEND_PXNAME		 2
+#define BACKEND_STATUS		 3
+#define BACKEND_WEIGHT		 4
+#define BACKEND_MODE		 5
+#define BACKEND_COOKIE		 6
+#define BACKEND_ALGO		 7
+#define BACKEND_LASTSESS	 8
+#define BACKEND_QTIME		 9
+#define BACKEND_CTIME		10
+#define BACKEND_RTIME		11
+#define BACKEND_TTIME		12
+#define BACKEND_ECON		13
+#define BACKEND_WRETR		14
+#define BACKEND_WREDIS		15
+#define BACKEND_SCUR		16
+#define BACKEND_SMAX		17
+#define BACKEND_SLIM		18
+#define BACKEND_STOT		19
+#define BACKEND_RATE		20
+#define BACKEND_RATE_MAX	21
+#define BACKEND_DREQ		22
+#define BACKEND_REQ_TOT		23
+#define BACKEND_LBTOT		24
+#define BACKEND_ERESP		25
+#define BACKEND_DRESP		26
+#define BACKEND_HRSP_1XX	27
+#define BACKEND_HRSP_2XX	28
+#define BACKEND_HRSP_3XX	29
+#define BACKEND_HRSP_4XX	30
+#define BACKEND_HRSP_5XX	31
+#define BACKEND_HRSP_OTHER	32
+#define BACKEND_QCUR		33
+#define BACKEND_QMAX		34
+#define BACKEND_ACT		35
+#define BACKEND_BCK		36
+#define BACKEND_CHKDOWN		37
+#define BACKEND_LASTCHG		38
+#define BACKEND_DOWNTIME	39
+#define BACKEND_CLI_ABRT	40
+#define BACKEND_SRV_ABRT	41
+#define BACKEND_BIN		42
+#define BACKEND_BOUT		43
+#define BACKEND_COMP_IN		44
+#define BACKEND_COMP_OUT	45
+#define BACKEND_COMP_BYP	46
+#define BACKEND_COMP_RSP	47
+#define BACKEND_INTERCEPTED	48
+#define BACKEND_PID		49
+
+// OIDs in l7RealServerTable
+#define REAL_SERVER_IID			 1
+#define REAL_SERVER_SID			 2
+#define REAL_SERVER_PXNAME		 3
+#define REAL_SERVER_SVNAME		 4
+#define REAL_SERVER_ADDRESS_TYPE	 5
+#define REAL_SERVER_ADDRESS_OCTETS	 6
+#define REAL_SERVER_ADDRESS_PORT	 7
+#define REAL_SERVER_STATUS		 8
+#define REAL_SERVER_WEIGHT		 9
+#define REAL_SERVER_MODE		10
+#define REAL_SERVER_COOKIE		11
+#define REAL_SERVER_ECON		12
+#define REAL_SERVER_WRETR		13
+#define REAL_SERVER_WREDIS		14
+#define REAL_SERVER_SCUR		15
+#define REAL_SERVER_SMAX		16
+#define REAL_SERVER_SLIM		17
+#define REAL_SERVER_STOT		18
+#define REAL_SERVER_LBTOT		19
+#define REAL_SERVER_RATE		20
+#define REAL_SERVER_RATE_MAX		21
+#define REAL_SERVER_ERESP		22
+#define REAL_SERVER_DRESP		23
+#define REAL_SERVER_HRSP_1XX		24
+#define REAL_SERVER_HRSP_2XX		25
+#define REAL_SERVER_HRSP_3XX		26
+#define REAL_SERVER_HRSP_4XX		27
+#define REAL_SERVER_HRSP_5XX		28
+#define REAL_SERVER_HRSP_OTHER		29
+#define REAL_SERVER_QCUR		30
+#define REAL_SERVER_QMAX		31
+#define REAL_SERVER_QLIMIT		32
+#define REAL_SERVER_BIN			33
+#define REAL_SERVER_BOUT		34
+#define REAL_SERVER_THROTTLE		35
+#define REAL_SERVER_TRACKED		36
+#define REAL_SERVER_CLI_ABRT		37
+#define REAL_SERVER_SRV_ABRT		38
+#define REAL_SERVER_LASTSESS		39
+#define REAL_SERVER_QTIME		40
+#define REAL_SERVER_CTIME		41
+#define REAL_SERVER_RTIME		42
+#define REAL_SERVER_TTIME		43
+#define REAL_SERVER_LAST_AGT		44
+#define REAL_SERVER_AGENT_STATUS	45
+#define REAL_SERVER_AGENT_CODE		46
+#define REAL_SERVER_AGENT_DURATION	47
+#define REAL_SERVER_AGENT_DESC		48
+#define REAL_SERVER_AGENT_RISE		49
+#define REAL_SERVER_AGENT_FALL		50
+#define REAL_SERVER_AGENT_HEALTH	51
+#define REAL_SERVER_ACT			52
+#define REAL_SERVER_BCK			53
+#define REAL_SERVER_LAST_CHK		54
+#define REAL_SERVER_CHECK_STATUS	55
+#define REAL_SERVER_CHECK_CODE		56
+#define REAL_SERVER_CHECK_DURATION	57
+#define REAL_SERVER_CHECK_DESC		58
+#define REAL_SERVER_CHKFAIL		59
+#define REAL_SERVER_CHKDOWN		60
+#define REAL_SERVER_LASTCHG		61
+#define REAL_SERVER_DOWNTIME		62
+#define REAL_SERVER_CHECK_RISE		63
+#define REAL_SERVER_CHECK_FALL		64
+#define REAL_SERVER_CHECK_HEALTH	65
+#define REAL_SERVER_HANAFAIL		66
+#define REAL_SERVER_PID			67
+
+// Typedefs
+typedef struct inet_address_and_port INetAddressAndPort;
+typedef struct proxy Proxy;
+typedef struct frontend Frontend;
+typedef struct backend Backend;
+typedef struct real_server RealServer;
+
+// Structs
+struct inet_address_and_port {
+	uint8_t		type;
+	char		octets [16];
+	uint16_t	port;
+};
+
+struct proxy {
+	/**   0 proxy name */
+	char	*pxname;
+	/**  27 unique proxy id */
+	int64_t	 iid;
+	Proxy	*next;
+};
+
+struct common {
+	Proxy		*proxy;
+	/**   4 current sessions */
+	int64_t		 scur;
+	/**   5 max sessions */
+	int64_t		 smax;
+	/**   6 configured session limit */
+	int64_t		 slim;
+	/**   7 cumulative number of sessions */
+	int64_t		 stot;
+	/**   8 bytes in */
+	int64_t		 bin;
+
+	/**   9 bytes out */
+	int64_t		 bout;
+	/**  11 responses denied because of security concerns.  - For http this is because of a matched http-request rule, or "option checkcache". */
+	int64_t		 dresp;
+	/**  17 status (UP/DOWN/NOLB/MAINT/MAINT(via)/MAINT(resolution)...) */
+	int64_t		 status;
+	/**  26 process id (0 for first instance, 1 for second, ...) */
+	int64_t		 pid;
+	/**  33 number of sessions per second over last elapsed second */
+	int64_t		 rate;
+	/**  35 max number of new sessions per second */
+	int64_t		 rate_max;
+	/**  39 http responses with 1xx code */
+	int64_t		 hrsp_1xx;
+	/**  40 http responses with 2xx code */
+	int64_t		 hrsp_2xx;
+	/**  41 http responses with 3xx code */
+	int64_t		 hrsp_3xx;
+	/**  42 http responses with 4xx code */
+	int64_t		 hrsp_4xx;
+	/**  43 http responses with 5xx code */
+	int64_t		 hrsp_5xx;
+	/**  44 http responses with other codes (protocol error) */
+	int64_t		 hrsp_other;
+	/**  75 proxy mode (tcp, http, health, unknown) */
+	int64_t		 mode;
+};
+
+struct frontend {
+	struct common	 common;
+	/**  10 requests denied because of security concerns. */
+	int64_t		 dreq;
+	/**  12 request errors. */
+	int64_t		 ereq;
+	/**  34 configured limit on new sessions per second */
+	int64_t		 rate_lim;
+	/**  46 HTTP requests per second over last elapsed second */
+	int64_t		 req_rate;
+	/**  47 max number of HTTP requests per second observed */
+	int64_t		 req_rate_max;
+	/**  48 total number of HTTP requests received */
+	int64_t		 req_tot;
+	/**  51 number of HTTP response bytes fed to the compressor */
+	int64_t		 comp_in;
+	/**  52 number of HTTP response bytes emitted by the compressor */
+	int64_t		 comp_out;
+	/**  53 number of bytes that bypassed the HTTP compressor (CPU/BW limit) */
+	int64_t		 comp_byp;
+	/**  54 number of HTTP responses that were compressed */
+	int64_t		 comp_rsp;
+	/**  77 number of connections over the last elapsed second */
+	int64_t		 conn_rate;
+	/**  78 highest known conn_rate */
+	int64_t		 conn_rate_max;
+	/**  79 cumulative number of connections */
+	int64_t		 conn_tot;
+	/**  80 cum. number of intercepted requests (monitor, stats) */
+	int64_t		 intercepted;
+	/**  81 requests denied by "tcp-request connection" rules */
+	int64_t		 dcon;
+	/**  82 requests denied by "tcp-request session" rules */
+	int64_t		 dses;
+	Frontend	*next;
+};
+
+struct backend {
+	struct common	 common;
+	/**   2 current queued requests. For the backend this reports the number queued without a server assigned. */
+	int64_t		 qcur;
+	/**   3 max value of qcur */
+	int64_t		 qmax;
+	/**  10 requests denied because of security concerns. */
+	int64_t		 dreq;
+	/**  13 number of requests that encountered an error trying to connect to a backend server. The backend stat is the sum of the stat for all servers of that backend, plus any connection errors not associated with a particular server (such as the backend having no active servers). */
+	int64_t		 econ;
+	/**  14 response errors. srv_abrt will be counted here also.  Some other errors are: - write error on the client socket (won't be counted for the server stat) - failure applying filters to the response. */
+	int64_t		 eresp;
+	/**  15 number of times a connection to a server was retried. */
+	int64_t		 wretr;
+	/**  16 number of times a request was redispatched to another server. The server value counts the number of times that server was switched away from. */
+	int64_t		 wredis;
+	/**  18 total weight (backend), server weight (server) */
+	int64_t		 weight;
+	/**  19 number of active servers (backend), server is active (server) */
+	int64_t		 act;
+	/**  20 number of backup servers (backend), server is backup (server) */
+	int64_t		 bck;
+	/**  22 number of UP->DOWN transitions. The backend counter counts transitions to the whole backend being down, rather than the sum of the counters for each server. */
+	int64_t		 chkdown;
+	/**  23 number of seconds since the last UP<->DOWN transition */
+	int64_t		 lastchg;
+	/**  24 total downtime (in seconds). The value for the backend is the downtime for the whole backend, not the sum of theowntime. */
+	int64_t		 downtime;
+	/**  30 total number of times a server was selected, either for new sessions, or when re-dispatching. The server counter is the number of times that server was selected. */
+	int64_t		 lbtot;
+	/**  48 total number of HTTP requests received */
+	int64_t		 req_tot;
+	/**  49 number of data transfers aborted by the client */
+	int64_t		 cli_abrt;
+	/**  50 number of data transfers aborted by the server (inc. in eresp) */
+	int64_t		 srv_abrt;
+	/**  51 number of HTTP response bytes fed to the compressor */
+	int64_t		 comp_in;
+	/**  52 number of HTTP response bytes emitted by the compressor */
+	int64_t		 comp_out;
+	/**  53 number of bytes that bypassed the HTTP compressor (CPU/BW limit) */
+	int64_t		 comp_byp;
+	/**  54 number of HTTP responses that were compressed */
+	int64_t		 comp_rsp;
+	/**  55 number of seconds since last session assigned to server/backend */
+	int64_t		 lastsess;
+	/**  58 the average queue time in ms over the 1024 last requests */
+	int64_t		 qtime;
+	/**  59 the average connect time in ms over the 1024 last requests */
+	int64_t		 ctime;
+	/**  60 the average response time in ms over the 1024 last requests (0 for TCP) */
+	int64_t		 rtime;
+	/**  61 the average total session time in ms over the 1024 last requests */
+	int64_t		 ttime;
+	/**  74 server's cookie value or backend's cookie name */
+	char		*cookie;
+	/**  76 load balancing algorithm */
+	int64_t		 algo;
+	/**  80 cum. number of intercepted requests (monitor, stats) */
+	int64_t		 intercepted;
+	Backend		*next;
+};
+
+struct real_server {
+	struct common	 common;
+	/**   1 service name (FRONTEND for frontend, BACKEND for backend,
+ 	        any name for server/listener) */
+	char		*svname;
+	/**   2 current queued requests. For the backend this reports
+	        the number queued without a server assigned. */
+	int64_t		 qcur;
+	/**   3 max value of qcur */
+	int64_t		 qmax;
+	/**  13 number of requests that encountered an error trying to
+ 		connect to a backend server. The backend stat is the sum
+		of the stat for all servers of that backend, plus any
+		connection errors not associated with a particular server
+		(such as the backend having no active servers). */
+	int64_t		 econ;
+	/**  14 response errors. srv_abrt will be counted here also.
+		Some other errors are: - write error on the client socket
+		(won't be counted for the server stat) - failure applying
+		filters to the response. */
+	int64_t		 eresp;
+	/**  15 number of times a connection to a server was retried. */
+	int64_t		 wretr;
+	/**  16 number of times a request was redispatched to another
+		server. The server value counts the number of times that
+		server was switched away from. */
+	int64_t		 wredis;
+	/**  18 total weight (backend), server weight (server) */
+	int64_t		 weight;
+	/**  19 server is active (server) */
+	int64_t		 act;
+	/**  20 server is backup (server) */
+	int64_t		 bck;
+	/**  21 number of failed checks. (Only counts checks failed when
+		the server is up.) */
+	int64_t		 chkfail;
+	/**  22 number of UP->DOWN transitions. The backend counter counts transitions to the whole backend being down, rather than the sum of the counters for each server. */
+	int64_t		 chkdown;
+	/**  23 number of seconds since the last UP<->DOWN transition */
+	int64_t		 lastchg;
+	/**  24 total downtime (in seconds). The value for the backend is the downtime for the whole backend, not the sum of theowntime. */
+	int64_t		 downtime;
+	/**  25 configured maxqueue for the server, or nothing in the value is 0 (default, meaning no limit) */
+	int64_t		 qlimit;
+	/**  28 server id (unique inside a proxy) */
+	int64_t		 sid;
+	/**  29 current throttle percentage for the server, when slowstart is active, or no value if not in slowstart. */
+	int64_t		 throttle;
+	/**  30 total number of times a server was selected, either for new sessions, or when re-dispatching. The server counter is the number of times that server was selected. */
+	int64_t		 lbtot;
+	/**  31 id of proxy/server if tracking is enabled. */
+	int64_t		 tracked;
+	/**  36 status of last health check, one of: */
+	int64_t		 check_status;
+	/**  37 layer5-7 code, if available */
+	int64_t		 check_code;
+	/**  38 time in ms took to finish last health check */
+	int64_t		 check_duration;
+	/**  45 failed health checks details */
+	int64_t		 hanafail;
+	/**  49 number of data transfers aborted by the client */
+	int64_t		 cli_abrt;
+	/**  50 number of data transfers aborted by the server (inc. in eresp) */
+	int64_t		 srv_abrt;
+	/**  55 number of seconds since last session assigned to server/backend */
+	int64_t		 lastsess;
+	/**  56 last health check contents or textual error */
+	char		*last_chk;
+	/**  57 last agent check contents or textual error */
+	char		*last_agt;
+	/**  58 the average queue time in ms over the 1024 last requests */
+	int64_t		 qtime;
+	/**  59 the average connect time in ms over the 1024 last requests */
+	int64_t		 ctime;
+	/**  60 the average response time in ms over the 1024 last requests (0 for TCP) */
+	int64_t		 rtime;
+	/**  61 the average total session time in ms over the 1024 last requests */
+	int64_t		 ttime;
+	/**  62 status of last agent check, one of: */
+	int64_t		 agent_status;
+	/**  63 numeric code reported by agent if any (unused for now) */
+	int64_t		 agent_code;
+	/**  64 time in ms taken to finish last check */
+	int64_t		 agent_duration;
+	/**  65 short human-readable description of check_status */
+	char		*check_desc;
+	/**  66 short human-readable description of agent_status */
+	char		*agent_desc;
+	/**  67 server's "rise" parameter used by checks */
+	int64_t		 check_rise;
+	/**  68 server's "fall" parameter used by checks */
+	int64_t		 check_fall;
+	/**  69 server's health check value between 0 and rise+fall-1 */
+	int64_t		 check_health;
+	/**  70 agent's "rise" parameter, normally 1 */
+	int64_t		 agent_rise;
+	/**  71 agent's "fall" parameter, normally 1 */
+	int64_t		 agent_fall;
+	/**  72 agent's health parameter, between 0 and rise+fall-1 */
+	int64_t		 agent_health;
+	/**  73 address:port or "unix". IPv6 has brackets around the address. */
+	INetAddressAndPort  address;
+	/**  74 server's cookie value or backend's cookie name */
+	char		*cookie;
+	RealServer	*next;
+};
+
+#ifndef HAPROXY_SOCKET_PATH
+#define HAPROXY_SOCKET_PATH "/var/run/haproxy.stat"
+#endif
+
+// Constant Data
+const char	default_socket_path[]	  = HAPROXY_SOCKET_PATH;
+const char	cmd_show_stat[]		  = "show stat\n";
+const uint8_t	address_length[]	  = { 0, 4, 16 };
+const oid	l7stat_oid[]		  = { 1,3,6,1,4,1,54849,1,2   },
+		l7stat_proxies_oid[]	  = { 1,3,6,1,4,1,54849,1,2,4 },
+		l7stat_frontends_oid[]	  = { 1,3,6,1,4,1,54849,1,2,5 },
+		l7stat_backends_oid[]	  = { 1,3,6,1,4,1,54849,1,2,6 },
+		l7stat_real_servers_oid[] = { 1,3,6,1,4,1,54849,1,2,7 };
+
+
+// Global state
+static char		 buffer[1024];
+static int64_t		 integers[33];
+static int64_t		 last_error;
+static time_t		 last_updated;
+static uint64_t		 update_interval;
+static char		*socket_path;
+static Proxy		*first_proxy,
+			*free_proxies;
+static Frontend		*first_frontend,
+			*free_frontends;
+static Backend		*first_backend,
+			*free_backends;
+static RealServer	*first_real_server,
+			*free_real_servers;
+
+// Prototypes
+static int l7stat_handle_backends (netsnmp_mib_handler *, netsnmp_handler_registration *, netsnmp_agent_request_info *, netsnmp_request_info *);
+static int l7stat_handle_backends (netsnmp_mib_handler *, netsnmp_handler_registration *, netsnmp_agent_request_info *, netsnmp_request_info *);
+static int l7stat_handle_frontends (netsnmp_mib_handler *, netsnmp_handler_registration *, netsnmp_agent_request_info *, netsnmp_request_info *);
+static int l7stat_handle_real_servers (netsnmp_mib_handler *, netsnmp_handler_registration *, netsnmp_agent_request_info *, netsnmp_request_info *);
+static int l7stat_handle_proxies (netsnmp_mib_handler *, netsnmp_handler_registration *, netsnmp_agent_request_info *, netsnmp_request_info *);
+static int l7stat_handle_scalars (netsnmp_mib_handler *, netsnmp_handler_registration *, netsnmp_agent_request_info *, netsnmp_request_info *);
+static netsnmp_variable_list * l7stat_real_server_first_entry (void **, void **, netsnmp_variable_list *, netsnmp_iterator_info *);
+static netsnmp_variable_list * l7stat_real_server_next_entry (void **, void **, netsnmp_variable_list *, netsnmp_iterator_info *);
+static netsnmp_variable_list * l7stat_backend_first_entry (void **, void **, netsnmp_variable_list *, netsnmp_iterator_info *);
+static netsnmp_variable_list * l7stat_backend_next_entry (void **, void **, netsnmp_variable_list *, netsnmp_iterator_info *);
+static netsnmp_variable_list * l7stat_frontend_first_entry (void **, void **, netsnmp_variable_list *, netsnmp_iterator_info *);
+static netsnmp_variable_list * l7stat_frontend_next_entry (void **, void **, netsnmp_variable_list *, netsnmp_iterator_info *);
+static netsnmp_variable_list * l7stat_proxy_first_entry (void **, void **, netsnmp_variable_list *, netsnmp_iterator_info *);
+static netsnmp_variable_list * l7stat_proxy_next_entry (void **, void **, netsnmp_variable_list *, netsnmp_iterator_info *);
+static int l7stat_load_cache (netsnmp_cache *, void *);
+static void l7stat_parse_stat ();
+static void l7stat_parse_stat_row (PARSER_STATE_DECL);
+static void l7stat_parse_early_field (uint8_t, bool, char *, char *, PARSER_STATE_DECL);
+static void l7stat_handle_type_field (char *, char *, PARSER_STATE_DECL);
+static void l7stat_parse_real_server_row (RealServer **, uint8_t, bool, PARSER_STATE_DECL);
+static void l7stat_parse_backend_row (Backend **, uint8_t, bool, PARSER_STATE_DECL);
+static void l7stat_parse_frontend_row (Frontend **, uint8_t, bool, PARSER_STATE_DECL);
+static void l7stat_parse_attempt_to_continue_after_error (PARSER_STATE_DECL);
+static void l7stat_parse_end_of_row (PARSER_STATE_DECL);
+static void sort_real_server (RealServer **);
+static RealServer ** find_existing_lexographically_first_real_server (RealServer **, RealServer **);
+static RealServer ** find_real_server (RealServer **, int64_t, int64_t);
+static RealServer ** find_existing_real_server (RealServer **, int64_t, int64_t);
+static void release_real_server (RealServer **);
+static RealServer * new_real_server (RealServer **, int64_t, int64_t);
+static void sort_backend (Backend **);
+static Backend ** find_existing_lexographically_first_backend (Backend **, Backend **);
+static Backend ** find_backend (Backend **, int64_t);
+static Backend ** find_existing_backend (Backend **, int64_t);
+static void release_backend (Backend **);
+static Backend * new_backend (Backend **, int64_t);
+static void sort_frontend (Frontend **);
+static Frontend ** find_existing_lexographically_first_frontend (Frontend **, Frontend **);
+static Frontend ** find_frontend (Frontend **, int64_t);
+static Frontend ** find_existing_frontend (Frontend **, int64_t);
+static void release_frontend (Frontend **);
+static Frontend * new_frontend (Frontend **, int64_t);
+static void sort_proxy (Proxy **);
+static Proxy ** find_existing_lexographically_first_proxy (Proxy **, Proxy **);
+static Proxy ** find_proxy (Proxy **, int64_t);
+static Proxy ** find_existing_proxy (Proxy **, int64_t);
+static Proxy * new_proxy (Proxy **);
+static void release_proxy (Proxy **);
+static bool l7stat_parse_inet_address_and_port (INetAddressAndPort *, PARSER_STATE_PTR_DECL);
+static bool l7stat_parse_algorithm (int64_t *, PARSER_STATE_PTR_DECL);
+static bool l7stat_parse_proxy_mode (int64_t *, PARSER_STATE_PTR_DECL);
+static bool l7stat_parse_agent_status (int64_t *, PARSER_STATE_PTR_DECL);
+static bool l7stat_parse_check_status (int64_t *, PARSER_STATE_PTR_DECL);
+static bool l7stat_parse_comma (PARSER_STATE_PTR_DECL);
+static bool l7stat_parse_signed_integer (int64_t *, PARSER_STATE_PTR_DECL);
+static bool l7stat_parse_string (char **, PARSER_STATE_PTR_DECL);
+static int yyfill (size_t, int, char **, char **, char **, char **);
+
+// 2. Program /////////////////////////////////////////////////////////
+
+// 2.1. Parsing Utility Functions /////////////////////////////////////
+
+static int yyfill (
+		size_t	  needed,
+		int	  fd,
+		char	**token,
+		char	**marker,
+		char	**cursor,
+		char	**limit) {
+	// Discard any consumed bytes at the start of the buffer
+	size_t consumed = *marker - buffer;
+	if (consumed > 0) {
+		memmove (buffer, *marker, *limit - *marker);
+		*cursor -= consumed;
+		*token -= consumed;
+		*marker -= consumed;
+		*limit -= consumed;
+	}
+
+	// Fill any free bytes at the end of the buffer
+	size_t used = *limit - buffer,
+	       free = sizeof buffer - used;
+	if (free >= needed) {
+		ssize_t bytes = read (fd, *limit, free);
+		if (bytes > 0) {
+			*limit += bytes;
+			if (bytes < free) {
+				memset (*limit, 0, free - bytes);
+			}
+		} else if (bytes == 0) {
+			L7STAT_ERROR(ERR_EOF)
+			return 1;
+		} else {
+			L7STAT_ERROR(ERR_IO)
+			return 1;
+		}
+	} else {
+		return 1;
+	}
+	return 0;
+}
+
+static bool l7stat_parse_string (
+		char **ret,
+		PARSER_STATE_PTR_DECL) {
+	char *token = *p_token,
+	     *marker = *p_marker,
+	     *cursor = *p_cursor,
+	     *limit = *p_limit;
+	for (;;) { // Consume whitespace
+		token = cursor;
+		/*!re2c
+		[\t ] { continue; }
+		''   { break; }
+ 		*/
+	}
+	token = cursor; // Note this is outside the loop, we want a multi-character match
+	for (;;) { // Parse the string
+		/*!re2c
+		[^,] { continue; }
+		''   { break; }
+		*/
+	}
+	*p_token  = token,
+	*p_marker = marker,
+	*p_cursor = cursor,
+	*p_limit  = limit;
+	*ret = strndup (token, cursor - token);
+	return false;
+}
+
+static bool l7stat_parse_signed_integer (
+		int64_t *result,
+		PARSER_STATE_PTR_DECL) {
+	char *token = *p_token,
+	     *marker = *p_marker,
+	     *cursor = *p_cursor,
+	     *limit = *p_limit;
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		[\t ] { continue; }
+		''    { break; }
+		*/
+	}
+	bool ret = true,
+	     neg = false;
+	int64_t r = 0;
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		'-' { neg = true; break;}
+		''  { break; }
+		*/
+	}
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		[0-9] {
+			ret = false;
+			r = (r * 10) + yych - '0';
+		}
+		''    { break; }
+		*/
+	}
+
+
+	*p_token  = token,
+	*p_marker = marker,
+	*p_cursor = cursor,
+	*p_limit  = limit;
+	*result = neg ? -r : r;
+	return ret;
+}
+
+static bool l7stat_parse_comma (
+		PARSER_STATE_PTR_DECL) {
+	char *token = *p_token,
+	     *marker = *p_marker,
+	     *cursor = *p_cursor,
+	     *limit = *p_limit;
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		[ \t] { continue; }
+		','   { break; }
+		''    { L7STAT_ERROR(ERR_EXPECTED_COMMA) return true; }
+		*/
+	}
+	*p_token  = token,
+	*p_marker = marker,
+	*p_cursor = cursor,
+	*p_limit  = limit;
+	return false;
+}
+
+static bool l7stat_parse_check_status (
+		int64_t *result,
+		PARSER_STATE_PTR_DECL) {
+	char *token = *p_token,
+	     *marker = *p_marker,
+	     *cursor = *p_cursor,
+	     *limit = *p_limit;
+	/* check_status (36):
+		UNK     -> unknown
+		INI     -> initializing
+		SOCKERR -> socket error
+		L4OK    -> check passed on layer 4, no upper layers testing enabled
+		L4TOUT  -> layer 1-4 timeout
+		L4CON   -> layer 1-4 connection problem, for example "Connection refused" (tcp rst) or "No route to host" (icmp)
+		L6OK    -> check passed on layer 6
+		L6TOUT  -> layer 6 (SSL) timeout
+		L6RSP   -> layer 6 invalid response - protocol error
+		L7OK    -> check passed on layer 7
+		L7OKC   -> check conditionally passed on layer 7, for example 404 with disable-on-404
+		L7TOUT  -> layer 7 (HTTP/SMTP) timeout
+		L7RSP   -> layer 7 invalid response - protocol error
+		L7STS   -> layer 7 response error, for example HTTP 5xx
+		Notice: If a check is currently running, the last known status will be reported, prefixed with "* ". e. g. "* L7OK".
+	*/
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		[\t ] { continue; }
+		'*'   { break; }
+		''    { break; }
+		*/
+	}
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		[\t ] { continue; }
+		''    { break; }
+		*/
+	}
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		'UNK'      { *result =  0; break; }
+		'INI'      { *result =  1; break; }
+		'CHECKED'  { *result =  2; break; }
+		'HANA'     { *result =  3; break; }
+		'SOCKERR'  { *result =  4; break; }
+		'L4OK'     { *result =  5; break; }
+		'L4TOUT'   { *result =  6; break; }
+		'L4CON'    { *result =  7; break; }
+		'L6OK'     { *result =  8; break; }
+		'L6TOUT'   { *result =  9; break; }
+		'L6RSP'    { *result = 10; break; }
+		'L7TOUT'   { *result = 11; break; }
+		'L7RSP'    { *result = 12; break; }
+		'L7OK'     { *result = 13; break; }
+		'L7OKC'    { *result = 14; break; }
+		'L7STS'    { *result = 15; break; }
+		'PROCERR'  { *result = 16; break; }
+		'PROCTOUT' { *result = 17; break; }
+		'PROCOK'   { *result = 18; break; }
+		''         { return true; }
+		*/
+	}
+	*p_token  = token,
+	*p_marker = marker,
+	*p_cursor = cursor,
+	*p_limit  = limit;
+	return false;
+}
+
+static bool l7stat_parse_agent_status (
+		int64_t *result,
+		PARSER_STATE_PTR_DECL) {
+	char *token = *p_token,
+	     *marker = *p_marker,
+	     *cursor = *p_cursor,
+	     *limit = *p_limit;
+	/* agent_status (62):
+		UNK     -> unknown
+		INI     -> initializing
+		SOCKERR -> socket error
+		L4OK    -> check passed on layer 4, no upper layers testing enabled
+		L4TOUT  -> layer 1-4 timeout
+		L4CON   -> layer 1-4 connection problem, for example "Connection refused" (tcp rst) or "No route to host" (icmp)
+		L7OK    -> agent reported "up"
+		L7STS   -> agent reported "fail", "stop", or "down"
+	*/
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		'UNK'      { *result =  0; break; }
+		'INI'      { *result =  1; break; }
+		'CHECKED'  { *result =  2; break; }
+		'HANA'     { *result =  3; break; }
+		'SOCKERR'  { *result =  4; break; }
+		'L4OK'     { *result =  5; break; }
+		'L4TOUT'   { *result =  6; break; }
+		'L4CON'    { *result =  7; break; }
+		'L6OK'     { *result =  8; break; }
+		'L6TOUT'   { *result =  9; break; }
+		'L6RSP'    { *result = 10; break; }
+		'L7TOUT'   { *result = 11; break; }
+		'L7RSP'    { *result = 12; break; }
+		'L7OK'     { *result = 13; break; }
+		'L7OKC'    { *result = 14; break; }
+		'L7STS'    { *result = 15; break; }
+		'PROCERR'  { *result = 16; break; }
+		'PROCTOUT' { *result = 17; break; }
+		'PROCOK'   { *result = 18; break; }
+		''         { return true; }
+		*/
+	}
+	*p_token  = token,
+	*p_marker = marker,
+	*p_cursor = cursor,
+	*p_limit  = limit;
+	return false;
+}
+
+static bool l7stat_parse_proxy_mode (
+		int64_t *result,
+		PARSER_STATE_PTR_DECL) {
+	char *token = *p_token,
+	     *marker = *p_marker,
+	     *cursor = *p_cursor,
+	     *limit = *p_limit;
+	// 75 proxy_mode (tcp, http, health)
+	bool invalid = false;
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		'tcp'    { *result = 1; break; }
+		'http'   { *result = 2; break; }
+		'health' { *result = 3; break; }
+		''       { *result = 0; invalid = true; break; }
+		*/
+	}
+	*p_token  = token,
+	*p_marker = marker,
+	*p_cursor = cursor,
+	*p_limit  = limit;
+	return invalid;
+}
+
+static bool l7stat_parse_algorithm (
+		int64_t *result,
+		PARSER_STATE_PTR_DECL) {
+	char *token = *p_token,
+	     *marker = *p_marker,
+	     *cursor = *p_cursor,
+	     *limit = *p_limit;
+	// 76 algorithm
+	bool invalid = false;
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		'leastconn'    { *result = 1; break; }
+		'roundrobin'   { *result = 2; break; }
+		''             { *result = 0; invalid = true; break; }
+		*/
+	}
+	*p_token  = token,
+	*p_marker = marker,
+	*p_cursor = cursor,
+	*p_limit  = limit;
+	return false;
+}
+
+
+static bool l7stat_parse_inet_address_and_port (
+		INetAddressAndPort *a,
+		PARSER_STATE_PTR_DECL) {
+	char *token = *p_token,
+	     *marker = *p_marker,
+	     *cursor = *p_cursor,
+	     *limit = *p_limit;
+
+	bool invalid = false,
+	     ipv6    = false;
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		[ \t] { continue; }
+		'['   { ipv6 = true; break; }
+		''    { break; }
+		*/
+	}
+	if (ipv6) {
+		token = cursor;
+		for (;;) {
+			/*!re2c
+			[a-zA-Z0-9:] { continue; }
+			']:'         {
+				*(cursor-2) = 0;
+				if (inet_pton (AF_INET6, token, a->octets) == 1) {
+					a->type = 2;
+				} else {
+					DEBUGMSGTL(("l7stat:parse", "%s:%d: Unable to parse IP address %s.\n", __func__, __LINE__, token));
+					invalid = true;
+				}
+				break;
+			}
+			''           { invalid = true; break; }
+			*/
+		}
+	} else {
+		token = cursor;
+		for (;;) {
+			/*!re2c
+			[0-9.] { continue; }
+			':'    {
+				*(cursor-1) = 0;
+				if (inet_pton (AF_INET, token, a->octets) == 1) {
+					a->type = 1;
+				} else {
+					DEBUGMSGTL(("l7stat:parse", "%s:%d: Unable to parse IP address %s.\n", __func__, __LINE__, token));
+					invalid = true;
+				}
+				break;
+			}
+			''     { invalid = true; break; }
+			*/
+		}
+
+	}
+
+	a->port = 0;
+	if (!invalid) {
+		int64_t temp = 0;
+		invalid = l7stat_parse_signed_integer (&temp, PARSER_STATE_PTRS);
+		if (temp > 0 && temp < 65536) {
+			a->port = temp;
+		}
+	}
+
+	*p_token  = token,
+	*p_marker = marker,
+	*p_cursor = cursor,
+	*p_limit  = limit;
+	return invalid;
+}
+
+// 2.2. Memory Managment Functions ////////////////////////////////////
+
+// 2.2.1. Proxy ///////////////////////////////////////////////////////
+
+static void release_proxy (Proxy **ptr_proxy) {
+	Proxy *proxy = *ptr_proxy;
+	*ptr_proxy = proxy->next;
+	DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Released structure for proxy.\n", __func__, __LINE__));
+	// Free dynamically allocated data here
+	SNMP_FREE (proxy->pxname);
+	proxy->next = free_proxies;
+	free_proxies = proxy;
+}
+
+static Proxy * new_proxy (Proxy **ptr_proxy) {
+	Proxy *proxy = NULL;
+	if (free_proxies) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Reusing previously allocated virtual proxy structure.\n", __func__, __LINE__));
+		proxy = free_proxies;
+		free_proxies = proxy->next;
+		SNMP_ZERO (proxy, sizeof (Proxy));
+	} else {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Allocating new proxy structure.\n", __func__, __LINE__));
+		proxy = SNMP_MALLOC_TYPEDEF (Proxy);
+	}
+	proxy->next = *ptr_proxy;
+	*ptr_proxy = proxy;
+	return proxy;
+}
+
+static Proxy ** find_existing_proxy (
+		Proxy	**ptr_proxy,
+		int64_t	  iid) {
+	Proxy *proxy = *ptr_proxy;
+	if (proxy == NULL) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Unable to locate structure for proxy %ld.\n", __func__, __LINE__, iid));
+		return ptr_proxy;
+	}
+	if (proxy->iid == iid) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Located structure for proxy %ld in linked list.\n", __func__, __LINE__, iid));
+		return ptr_proxy;
+	}
+	return find_existing_proxy (&proxy->next, iid);
+}
+
+static Proxy ** find_proxy (
+		Proxy	**ptr_proxy,
+		int64_t	  iid) {
+	ptr_proxy = find_existing_proxy (ptr_proxy, iid);
+	Proxy *proxy = *ptr_proxy;
+	if (proxy == NULL) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Creating structure for proxy %ld and adding it to end of linked list.\n", __func__, __LINE__, iid));
+		proxy = new_proxy (ptr_proxy);
+		proxy->iid = iid;
+	}
+	return ptr_proxy;
+}
+
+static Proxy ** find_existing_lexographically_first_proxy (
+		Proxy	**ptr_head,
+		Proxy	**ptr_best) {
+	Proxy *head = *ptr_head,
+	      *best = *ptr_best;
+	if (head == NULL) {
+		// End of list; done.
+		return ptr_best;
+	}
+	if (head->iid < best->iid) {
+		// New ptr_best found.
+		ptr_best = ptr_head;
+	}
+	return find_existing_lexographically_first_proxy (&head->next, ptr_best);
+}
+
+static void sort_proxy (Proxy **ptr_head) {
+	Proxy *head = *ptr_head;
+	if (head == NULL) {
+		// End of list; done.
+		return;
+	}
+	Proxy **ptr_best = find_existing_lexographically_first_proxy (ptr_head, ptr_head);
+	if (ptr_best != ptr_head) {
+		// Found a proxy that should be made the head of the list
+		Proxy *best = *ptr_best;
+		*ptr_best = best->next;
+		best->next = head;
+		*ptr_head = head = best;
+	}
+	return sort_proxy (&head->next);
+}
+
+// 2.2.2. Frontend ////////////////////////////////////////////////////
+
+static void release_frontend (Frontend **ptr_frontend) { 
+	Frontend *frontend = *ptr_frontend;
+	*ptr_frontend = frontend->next;
+	DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Released structure for frontend.\n", __func__, __LINE__));
+	// Free dynamically allocated data here
+	// SNMP_FREE (frontend->y);
+	frontend->next = free_frontends;
+	free_frontends = frontend;
+}
+
+static Frontend * new_frontend (Frontend **ptr_frontend, int64_t iid) { 
+	Frontend *frontend = NULL;
+	if (free_frontends) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Reusing previously allocated virtual frontend structure.\n", __func__, __LINE__));
+		frontend = free_frontends;
+		free_frontends = frontend->next;
+		SNMP_ZERO (frontend, sizeof (Frontend));
+	} else {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Allocating new frontend structure.\n", __func__, __LINE__));
+		frontend = SNMP_MALLOC_TYPEDEF (Frontend);
+	}
+	frontend->next = *ptr_frontend;
+	frontend->common.proxy = *find_proxy (&first_proxy, iid);
+	*ptr_frontend = frontend;
+	return frontend;
+}
+
+static Frontend ** find_existing_frontend (Frontend **ptr_frontend, int64_t iid) { 
+	Frontend *frontend = *ptr_frontend;
+	if (frontend == NULL) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Unable to locate structure for frontend %ld.\n", __func__, __LINE__, iid));
+		return ptr_frontend;
+	}
+	if (frontend->common.proxy && frontend->common.proxy->iid == iid) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Located structure for frontend %ld in linked list.\n", __func__, __LINE__, iid));
+		return ptr_frontend;
+	}
+	return find_existing_frontend (&frontend->next, iid);
+}
+
+static Frontend ** find_frontend (Frontend **ptr_frontend, int64_t iid) { 
+	ptr_frontend = find_existing_frontend (ptr_frontend, iid);
+	Frontend *frontend = *ptr_frontend;
+	if (frontend == NULL) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Creating structure for frontend %ld and adding it to end of linked list.\n", __func__, __LINE__, iid));
+		new_frontend (ptr_frontend, iid);
+	}
+	return ptr_frontend;
+}
+
+static Frontend ** find_existing_lexographically_first_frontend (Frontend **head_ptr, Frontend **best_ptr) {
+	Frontend *head = *head_ptr,
+	  *best = *best_ptr;
+	if (head == NULL) {
+		// End of list; done.
+		return best_ptr;
+	}
+	if (head->common.proxy->iid < best->common.proxy->iid) {
+		// New best_ptr found.
+		best_ptr = head_ptr;
+	}
+	return find_existing_lexographically_first_frontend (&head->next, best_ptr);
+}
+
+static void sort_frontend (Frontend **head_ptr) {
+	Frontend *head = *head_ptr;
+	if (head == NULL) {
+		// End of list; done.
+		return;
+	}
+	Frontend **best_ptr = find_existing_lexographically_first_frontend (head_ptr, head_ptr);
+	if (best_ptr != head_ptr) {
+		// Found a frontend that should be made the head of the list
+		Frontend *best = *best_ptr;
+		*best_ptr = best->next;
+		best->next = head;
+		*head_ptr = head = best;
+	}
+	return sort_frontend (&head->next);
+}
+
+// 2.2.3. Backend /////////////////////////////////////////////////////
+
+static void release_backend (Backend **ptr_backend) { 
+	Backend *backend = *ptr_backend;
+	*ptr_backend = backend->next;
+	DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Released structure for backend.\n", __func__, __LINE__));
+	// Free dynamically allocated data here
+	// SNMP_FREE (backend->y);
+	backend->next = free_backends;
+	free_backends = backend;
+}
+
+static Backend * new_backend (Backend **ptr_backend, int64_t iid) { 
+	Backend *backend = NULL;
+	if (free_backends) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Reusing previously allocated virtual backend structure.\n", __func__, __LINE__));
+		backend = free_backends;
+		free_backends = backend->next;
+		SNMP_ZERO (backend, sizeof (Backend));
+	} else {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Allocating new backend structure.\n", __func__, __LINE__));
+		backend = SNMP_MALLOC_TYPEDEF (Backend);
+	}
+	backend->next = *ptr_backend;
+	backend->common.proxy = *find_proxy (&first_proxy, iid);
+	*ptr_backend = backend;
+	return backend;
+}
+
+static Backend ** find_existing_backend (Backend **ptr_backend, int64_t iid) { 
+	Backend *backend = *ptr_backend;
+	if (backend == NULL) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Unable to locate structure for backend %ld.\n", __func__, __LINE__, iid));
+		return ptr_backend;
+	}
+	if (backend->common.proxy && backend->common.proxy->iid == iid) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Located structure for backend %ld in linked list.\n", __func__, __LINE__, iid));
+		return ptr_backend;
+	}
+	return find_existing_backend (&backend->next, iid);
+}
+
+static Backend ** find_backend (Backend **ptr_backend, int64_t iid) { 
+	ptr_backend = find_existing_backend (ptr_backend, iid);
+	Backend *backend = *ptr_backend;
+	if (backend == NULL) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Creating structure for backend %ld and adding it to end of linked list.\n", __func__, __LINE__, iid));
+		new_backend (ptr_backend, iid);
+	}
+	return ptr_backend;
+}
+
+static Backend ** find_existing_lexographically_first_backend (Backend **head_ptr, Backend **best_ptr) {
+	Backend *head = *head_ptr,
+	  *best = *best_ptr;
+	if (head == NULL) {
+		// End of list; done.
+		return best_ptr;
+	}
+	if (head->common.proxy->iid < best->common.proxy->iid) {
+		// New best_ptr found.
+		best_ptr = head_ptr;
+	}
+	return find_existing_lexographically_first_backend (&head->next, best_ptr);
+}
+
+static void sort_backend (Backend **head_ptr) {
+	Backend *head = *head_ptr;
+	if (head == NULL) {
+		// End of list; done.
+		return;
+	}
+	Backend **best_ptr = find_existing_lexographically_first_backend (head_ptr, head_ptr);
+	if (best_ptr != head_ptr) {
+		// Found a backend that should be made the head of the list
+		Backend *best = *best_ptr;
+		*best_ptr = best->next;
+		best->next = head;
+		*head_ptr = head = best;
+	}
+	return sort_backend (&head->next);
+}
+
+// 2.2.3. Real Server /////////////////////////////////////////////////
+
+static void release_real_server (RealServer **ptr_real_server) { 
+	RealServer *real_server = *ptr_real_server;
+	*ptr_real_server = real_server->next;
+	DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Released structure for real_server.\n", __func__, __LINE__));
+	// Free dynamically allocated data here
+	// SNMP_FREE (real_server->y);
+	real_server->next = free_real_servers;
+	free_real_servers = real_server;
+}
+
+static RealServer * new_real_server (RealServer **ptr_real_server, int64_t iid, int64_t sid) { 
+	RealServer *real_server = NULL;
+	if (free_real_servers) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Reusing previously allocated virtual real_server structure.\n", __func__, __LINE__));
+		real_server = free_real_servers;
+		free_real_servers = real_server->next;
+		SNMP_ZERO (real_server, sizeof (RealServer));
+	} else {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Allocating new real_server structure.\n", __func__, __LINE__));
+		real_server = SNMP_MALLOC_TYPEDEF (RealServer);
+	}
+	real_server->common.proxy = *find_proxy (&first_proxy, iid);
+	real_server->next = *ptr_real_server;
+	*ptr_real_server = real_server;
+	return real_server;
+}
+
+static RealServer ** find_existing_real_server (RealServer **ptr_real_server, int64_t iid, int64_t sid) { 
+	RealServer *real_server = *ptr_real_server;
+	if (real_server == NULL) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Unable to locate structure for real_server %ld.\n", __func__, __LINE__, iid));
+		return ptr_real_server;
+	}
+	if (real_server->sid == sid && real_server->common.proxy && real_server->common.proxy->iid == iid) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Located structure for real_server %ld in linked list.\n", __func__, __LINE__, iid));
+		return ptr_real_server;
+	}
+	return find_existing_real_server (&real_server->next, iid, sid);
+}
+
+static RealServer ** find_real_server (RealServer **ptr_real_server, int64_t iid, int64_t sid) { 
+	ptr_real_server = find_existing_real_server (ptr_real_server, iid, sid);
+	RealServer *real_server = *ptr_real_server;
+	if (real_server == NULL) {
+		DEBUGMSGTL(("l7stat:memory_management", "%s:%d: Creating structure for real_server %ld and adding it to end of linked list.\n", __func__, __LINE__, iid));
+		real_server = new_real_server (ptr_real_server, iid, sid);
+		real_server->sid = sid;
+	}
+	return ptr_real_server;
+}
+
+static RealServer ** find_existing_lexographically_first_real_server (RealServer **head_ptr, RealServer **best_ptr) {
+	RealServer *head = *head_ptr,
+	  *best = *best_ptr;
+	if (head == NULL) {
+		// End of list; done.
+		return best_ptr;
+	}
+	if (head->common.proxy->iid < best->common.proxy->iid) {
+		// New best_ptr found.
+		best_ptr = head_ptr;
+	}
+	return find_existing_lexographically_first_real_server (&head->next, best_ptr);
+}
+
+static void sort_real_server (RealServer **head_ptr) {
+	RealServer *head = *head_ptr;
+	if (head == NULL) {
+		// End of list; done.
+		return;
+	}
+	RealServer **best_ptr = find_existing_lexographically_first_real_server (head_ptr, head_ptr);
+	if (best_ptr != head_ptr) {
+		// Found a virtual service that should be made the head of the list
+		RealServer *best = *best_ptr;
+		*best_ptr = best->next;
+		best->next = head;
+		*head_ptr = head = best;
+	}
+	return sort_real_server (&head->next);
+}
+
+// 2.4. Parsing HAProxy Output ////////////////////////////////////////
+
+static void l7stat_parse_end_of_row (PARSER_STATE_DECL) {
+	DEBUGMSGTL(("l7stat:parse", "%s:%d: parsing end of line.\n", __func__, __LINE__));
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		'\n'  { break; }
+		[^\n] { continue; }
+		''    { L7STAT_ERROR(ERR_EXPECTED_EOL) return; }
+		*/
+	}
+	return l7stat_parse_stat_row (PARSER_STATE);
+}
+
+static void l7stat_parse_attempt_to_continue_after_error (PARSER_STATE_DECL) {
+	DEBUGMSGTL(("l7stat:parse", "%s:%d: attempting to recover by discarding all bytes to next end of line.\n", __func__, __LINE__));
+	for (;;) {
+		token = cursor;
+		/*!re2c
+		'\n'  { break; }
+		[^\n] { continue; }
+		''    { return; }
+		*/
+	}
+	return l7stat_parse_stat_row (PARSER_STATE);
+}
+
+static void l7stat_parse_frontend_row (
+		Frontend	**ptr_frontend,
+		uint8_t		  field,
+		bool		  error,
+		PARSER_STATE_DECL) {
+	Frontend *frontend = *ptr_frontend;
+	switch (field) {
+		case FIELD_83:
+		return l7stat_parse_end_of_row (PARSER_STATE);
+
+		case FIELD_SMAX:
+		error = l7stat_parse_signed_integer (&frontend->common.smax, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_RATE:
+		error = l7stat_parse_signed_integer (&frontend->common.rate, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_RATE_LIM:
+		error = l7stat_parse_signed_integer (&frontend->rate_lim, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_RATE_MAX:
+		error = l7stat_parse_signed_integer (&frontend->common.rate_max, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_1XX:
+		error = l7stat_parse_signed_integer (&frontend->common.hrsp_1xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_2XX:
+		error = l7stat_parse_signed_integer (&frontend->common.hrsp_2xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_3XX:
+		error = l7stat_parse_signed_integer (&frontend->common.hrsp_3xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_4XX:
+		error = l7stat_parse_signed_integer (&frontend->common.hrsp_4xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_5XX:
+		error = l7stat_parse_signed_integer (&frontend->common.hrsp_5xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_OTHER:
+		error = l7stat_parse_signed_integer (&frontend->common.hrsp_other, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_REQ_RATE:
+		error = l7stat_parse_signed_integer (&frontend->req_rate, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_REQ_RATE_MAX:
+		error = l7stat_parse_signed_integer (&frontend->req_rate_max, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_REQ_TOT:
+		error = l7stat_parse_signed_integer (&frontend->req_tot, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_COMP_IN:
+		error = l7stat_parse_signed_integer (&frontend->comp_in, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_COMP_OUT:
+		error = l7stat_parse_signed_integer (&frontend->comp_out, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_COMP_BYP:
+		error = l7stat_parse_signed_integer (&frontend->comp_byp, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_COMP_RSP:
+		error = l7stat_parse_signed_integer (&frontend->comp_rsp, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_MODE:
+		error = l7stat_parse_proxy_mode (&frontend->common.mode, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CONN_RATE:
+		error = l7stat_parse_signed_integer (&frontend->conn_rate, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CONN_RATE_MAX:
+		error = l7stat_parse_signed_integer (&frontend->conn_rate_max, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CONN_TOT:
+		error = l7stat_parse_signed_integer (&frontend->conn_tot, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_INTERCEPTED:
+		error = l7stat_parse_signed_integer (&frontend->intercepted, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_DCON:
+		error = l7stat_parse_signed_integer (&frontend->dcon, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_DSES:
+		error = l7stat_parse_signed_integer (&frontend->dses, PARSER_STATE_PTRS);
+		break;
+	}
+
+	if (l7stat_parse_comma (PARSER_STATE_PTRS)) {
+		DEBUGMSGTL(("l7stat:error", "%s:%d: wanted comma in frontend row, %s, field %d (row will be included, but incomplete).\n", __func__, __LINE__, frontend->common.proxy->pxname, field));
+		return l7stat_parse_attempt_to_continue_after_error (PARSER_STATE);
+	}
+
+	return l7stat_parse_frontend_row (ptr_frontend, ++field, error, PARSER_STATE);
+}
+
+static void l7stat_parse_backend_row (
+		Backend **ptr_backend,
+		uint8_t field,
+		bool error,
+		PARSER_STATE_DECL) {
+	Backend *backend = *ptr_backend;
+	switch (field) {
+		case FIELD_83:
+		return l7stat_parse_end_of_row (PARSER_STATE);
+
+		case FIELD_SMAX:
+		error = l7stat_parse_signed_integer (&backend->common.smax, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_RATE:
+		error = l7stat_parse_signed_integer (&backend->common.rate, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_RATE_MAX:
+		error = l7stat_parse_signed_integer (&backend->common.rate_max, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_1XX:
+		error = l7stat_parse_signed_integer (&backend->common.hrsp_1xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_2XX:
+		error = l7stat_parse_signed_integer (&backend->common.hrsp_2xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_3XX:
+		error = l7stat_parse_signed_integer (&backend->common.hrsp_3xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_4XX:
+		error = l7stat_parse_signed_integer (&backend->common.hrsp_4xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_5XX:
+		error = l7stat_parse_signed_integer (&backend->common.hrsp_5xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_OTHER:
+		error = l7stat_parse_signed_integer (&backend->common.hrsp_other, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_REQ_TOT:
+		error = l7stat_parse_signed_integer (&backend->req_tot, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CLI_ABRT:
+		error = l7stat_parse_signed_integer (&backend->cli_abrt, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_SRV_ABRT:
+		error = l7stat_parse_signed_integer (&backend->srv_abrt, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_COMP_IN:
+		error = l7stat_parse_signed_integer (&backend->comp_in, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_COMP_OUT:
+		error = l7stat_parse_signed_integer (&backend->comp_out, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_COMP_BYP:
+		error = l7stat_parse_signed_integer (&backend->comp_byp, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_COMP_RSP:
+		error = l7stat_parse_signed_integer (&backend->comp_rsp, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_LASTSESS:
+		error = l7stat_parse_signed_integer (&backend->lastsess, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_QTIME:
+		error = l7stat_parse_signed_integer (&backend->qtime, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CTIME:
+		error = l7stat_parse_signed_integer (&backend->ctime, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_RTIME:
+		error = l7stat_parse_signed_integer (&backend->rtime, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_TTIME:
+		error = l7stat_parse_signed_integer (&backend->ttime, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_COOKIE:
+		error = l7stat_parse_string (&backend->cookie, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_MODE:
+		error = l7stat_parse_proxy_mode (&backend->common.mode, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_ALGO:
+		error = l7stat_parse_algorithm (&backend->algo, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_INTERCEPTED:
+		error = l7stat_parse_signed_integer (&backend->intercepted, PARSER_STATE_PTRS);
+		break;
+	}
+
+	if (l7stat_parse_comma (PARSER_STATE_PTRS)) {
+		DEBUGMSGTL(("l7stat:error", "%s:%d: wanted comma in backend row, %s, field %d (row will be included, but incomplete).\n", __func__, __LINE__, backend->common.proxy->pxname, field));
+		return l7stat_parse_attempt_to_continue_after_error (PARSER_STATE);
+	}
+
+	return l7stat_parse_backend_row (ptr_backend, ++field, error, PARSER_STATE);
+}
+
+static void l7stat_parse_real_server_row (
+		RealServer **ptr_real_server,
+		uint8_t field,
+		bool error,
+		PARSER_STATE_DECL) {
+	RealServer *real_server = *ptr_real_server;
+	switch (field) {
+		case FIELD_83:
+		return l7stat_parse_end_of_row (PARSER_STATE);
+
+		case FIELD_SMAX:
+		error = l7stat_parse_signed_integer (&real_server->common.smax, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_RATE:
+		error = l7stat_parse_signed_integer (&real_server->common.rate, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_RATE_MAX:
+		error = l7stat_parse_signed_integer (&real_server->common.rate_max, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_1XX:
+		error = l7stat_parse_signed_integer (&real_server->common.hrsp_1xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_2XX:
+		error = l7stat_parse_signed_integer (&real_server->common.hrsp_2xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_3XX:
+		error = l7stat_parse_signed_integer (&real_server->common.hrsp_3xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_4XX:
+		error = l7stat_parse_signed_integer (&real_server->common.hrsp_4xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_5XX:
+		error = l7stat_parse_signed_integer (&real_server->common.hrsp_5xx, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HRSP_OTHER:
+		error = l7stat_parse_signed_integer (&real_server->common.hrsp_other, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_MODE:
+		error = l7stat_parse_proxy_mode (&real_server->common.mode, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CHECK_STATUS:
+		error = l7stat_parse_check_status (&real_server->check_status, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CHECK_CODE:
+		error = l7stat_parse_signed_integer (&real_server->check_code, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CHECK_DURATION:
+		error = l7stat_parse_signed_integer (&real_server->check_duration, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_HANAFAIL:
+		error = l7stat_parse_signed_integer (&real_server->hanafail, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CLI_ABRT:
+		error = l7stat_parse_signed_integer (&real_server->cli_abrt, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_SRV_ABRT:
+		error = l7stat_parse_signed_integer (&real_server->srv_abrt, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_LASTSESS:
+		error = l7stat_parse_signed_integer (&real_server->lastsess, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_LAST_CHK:
+		error = l7stat_parse_string (&real_server->last_chk, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_LAST_AGT:
+		error = l7stat_parse_string (&real_server->last_agt, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_QTIME:
+		error = l7stat_parse_signed_integer (&real_server->qtime, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CTIME:
+		error = l7stat_parse_signed_integer (&real_server->ctime, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_RTIME:
+		error = l7stat_parse_signed_integer (&real_server->rtime, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_TTIME:
+		error = l7stat_parse_signed_integer (&real_server->ttime, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_AGENT_STATUS:
+		error = l7stat_parse_agent_status (&real_server->agent_status, PARSER_STATE_PTRS);
+		break;
+
+
+		/* HAProxy documentation lists this as "unused for now"
+		case FIELD_AGENT_CODE:
+		error = l7stat_parse_signed_integer (&real_server->agent_code, PARSER_STATE_PTRS);
+		break;
+
+		*/
+
+		case FIELD_AGENT_DURATION:
+		error = l7stat_parse_signed_integer (&real_server->agent_duration, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CHECK_DESC:
+		error = l7stat_parse_string (&real_server->check_desc, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_AGENT_DESC:
+		error = l7stat_parse_string (&real_server->agent_desc, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CHECK_RISE:
+		error = l7stat_parse_signed_integer (&real_server->check_rise, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CHECK_FALL:
+		error = l7stat_parse_signed_integer (&real_server->check_fall, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_CHECK_HEALTH:
+		error = l7stat_parse_signed_integer (&real_server->check_health, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_AGENT_RISE:
+		error = l7stat_parse_signed_integer (&real_server->agent_rise, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_AGENT_FALL:
+		error = l7stat_parse_signed_integer (&real_server->agent_fall, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_AGENT_HEALTH:
+		error = l7stat_parse_signed_integer (&real_server->agent_health, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_ADDRESS:
+		error = l7stat_parse_inet_address_and_port (&real_server->address, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_COOKIE:
+		error = l7stat_parse_string (&real_server->cookie, PARSER_STATE_PTRS);
+		break;
+	}
+
+	if (l7stat_parse_comma (PARSER_STATE_PTRS)) {
+		DEBUGMSGTL(("l7stat:error", "%s:%d: wanted comma in real server row, %s %s, field %d (row will be included, but incomplete).\n", __func__, __LINE__,  real_server->svname, real_server->common.proxy->pxname, field));
+		return l7stat_parse_attempt_to_continue_after_error (PARSER_STATE);
+	}
+
+	return l7stat_parse_real_server_row (
+			ptr_real_server,
+			field + 1,
+			error,
+			PARSER_STATE);
+}
+
+static void l7stat_handle_type_field (
+		char *pxname,
+		char *svname,
+		PARSER_STATE_DECL) {
+	RealServer	 *real_server	  = NULL,
+			**real_server_ptr = NULL;
+	Frontend	 *frontend	  = NULL,
+			**frontend_ptr	  = NULL;
+	Backend		 *backend	  = NULL,
+			**backend_ptr	  = NULL;
+
+	DEBUGMSGTL(("l7stat:parse", "%s:%d: Adding row for %s %s.\n", __func__, __LINE__, pxname, svname));
+
+	switch (integers [32]) {
+		case 0: // Type is Front End.
+		frontend_ptr = find_frontend (&first_frontend, integers [27]);
+		frontend = *frontend_ptr;
+
+		if (frontend->common.proxy->pxname) {
+			free (pxname);
+		} else {
+			frontend->common.proxy->pxname = pxname;
+		}
+
+		free (svname); // Free pointless svname
+
+		frontend->common.scur   = integers [FIELD_SCUR];
+		frontend->common.smax   = integers [FIELD_SMAX];
+		frontend->common.slim   = integers [FIELD_SLIM];
+		frontend->common.stot   = integers [FIELD_STOT];
+		frontend->common.bin    = integers [FIELD_BIN];
+		frontend->common.bout   = integers [FIELD_BOUT];
+		frontend->dreq          = integers [FIELD_DREQ];
+		frontend->common.dresp  = integers [FIELD_DRESP];
+		frontend->ereq          = integers [FIELD_EREQ];
+		frontend->common.status = integers [FIELD_STATUS];
+		frontend->common.pid    = integers [FIELD_PID];
+
+		return l7stat_parse_frontend_row (frontend_ptr, 33, false, PARSER_STATE);
+
+		case 1: // Type is Back End.
+		backend_ptr = find_backend (&first_backend, integers [27]);
+		backend = *backend_ptr;
+
+		if (backend->common.proxy->pxname) {
+			free (pxname);
+		} else {
+			backend->common.proxy->pxname = pxname;
+		}
+
+		free (svname); // Free pointless svname
+
+		backend->qcur          = integers [FIELD_QCUR];
+		backend->qmax          = integers [FIELD_QMAX];
+		backend->common.scur   = integers [FIELD_SCUR];
+		backend->common.smax   = integers [FIELD_SMAX];
+		backend->common.slim   = integers [FIELD_SLIM];
+		backend->common.stot   = integers [FIELD_STOT];
+		backend->common.bin    = integers [FIELD_BIN];
+		backend->common.bout   = integers [FIELD_BOUT];
+		backend->dreq          = integers [FIELD_DREQ];
+		backend->common.dresp  = integers [FIELD_DRESP];
+		backend->econ          = integers [FIELD_ECON];
+		backend->eresp         = integers [FIELD_ERESP];
+		backend->common.status = integers [FIELD_STATUS];
+		backend->weight        = integers [FIELD_WEIGHT];
+		backend->act           = integers [FIELD_ACT];
+		backend->bck           = integers [FIELD_BCK];
+		backend->chkdown       = integers [FIELD_CHKDOWN];
+		backend->lastchg       = integers [FIELD_LASTCHG];
+		backend->downtime      = integers [FIELD_DOWNTIME];
+		backend->common.pid    = integers [FIELD_PID];
+		backend->lbtot         = integers [FIELD_LBTOT];
+
+		return l7stat_parse_backend_row (backend_ptr, 33, false, PARSER_STATE);
+
+		case 2: // Type is Server.
+		real_server_ptr = find_real_server (&first_real_server, integers [27], integers [28]);
+		real_server = *real_server_ptr;
+
+		if (real_server->common.proxy->pxname) {
+			free (pxname);
+		} else {
+			real_server->common.proxy->pxname = pxname;
+		}
+
+		real_server->svname        = svname;
+		real_server->qcur          = integers [FIELD_QCUR];
+		real_server->qmax          = integers [FIELD_QMAX];
+		real_server->common.scur   = integers [FIELD_SCUR];
+		real_server->common.smax   = integers [FIELD_SMAX];
+		real_server->common.slim   = integers [FIELD_SLIM];
+		real_server->common.stot   = integers [FIELD_STOT];
+		real_server->common.bin    = integers [FIELD_BIN];
+		real_server->common.bout   = integers [FIELD_BOUT];
+		real_server->common.dresp  = integers [FIELD_DRESP];
+		real_server->econ          = integers [FIELD_ECON];
+		real_server->eresp         = integers [FIELD_ERESP];
+		real_server->wretr         = integers [FIELD_WRETR];
+		real_server->wredis        = integers [FIELD_WREDIS];
+		real_server->common.status = integers [FIELD_STATUS];
+		real_server->weight        = integers [FIELD_WEIGHT];
+		real_server->act           = integers [FIELD_ACT];
+		real_server->bck           = integers [FIELD_BCK];
+		real_server->chkdown       = integers [FIELD_CHKDOWN];
+		real_server->lastchg       = integers [FIELD_LASTCHG];
+		real_server->downtime      = integers [FIELD_DOWNTIME];
+		real_server->chkfail       = integers [FIELD_CHKFAIL];
+		real_server->qlimit        = integers [FIELD_QLIMIT];
+		real_server->sid           = integers [FIELD_SID];
+		real_server->throttle      = integers [FIELD_THROTTLE];
+		real_server->lbtot         = integers [FIELD_LBTOT];
+		real_server->tracked       = integers [FIELD_TRACKED];
+		real_server->common.pid    = integers [FIELD_PID];
+
+		return l7stat_parse_real_server_row (real_server_ptr, 33, false, PARSER_STATE);
+
+		default:
+		L7STAT_ERROR(ERR_INVALID_TYPE)
+		DEBUGMSGTL(("l7stat:error", "%s:%d: unknown type %ld for row, %s %s (row will not be included).\n", __func__, __LINE__, integers [32], pxname, svname));
+		return l7stat_parse_attempt_to_continue_after_error (PARSER_STATE);
+	}
+}
+
+static void l7stat_parse_early_field (
+		uint8_t	 field,
+		bool	 error,
+		char	*pxname,
+		char	*svname,
+		PARSER_STATE_DECL) {
+	DEBUGMSGTL(("l7stat:parse", "%s:%d: parsing field %d.\n", __func__, __LINE__, field));
+	switch (field) {
+		default:
+		return l7stat_handle_type_field (pxname, svname, PARSER_STATE);
+
+		case FIELD_PXNAME:
+		error = l7stat_parse_string (&pxname, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_SVNAME:  // svname
+		error = l7stat_parse_string (&svname, PARSER_STATE_PTRS);
+		break;
+
+		case FIELD_STATUS:
+		// 17: status (UP/DOWN/NOLB/MAINT/MAINT(via)/MAINT(resolution)
+		token = cursor;
+		for (;;) {
+			/*!re2c
+			'UP'        { integers [17] = 1; error = false; break; }
+			'DOWN'      { integers [17] = 3; error = false; break; }
+			'NOLB'      { integers [17] = 4; error = false; break; }
+			'MAINT'     { integers [17] = 5; error = false; break; }
+			'OPEN'      { integers [17] = 4; error = false; break; }
+			'DRAIN'     { integers [17] = 6; error = false; break; }
+			'no check'  { integers [17] = 2; error = false; break; }
+			''          { integers [17] = 0; error = true; break; }
+			*/
+		}
+		for (;;) { // Consume extra info after MAINT token
+			token = cursor;
+			/*!re2c
+			[^,] { continue; }
+			''   { break; }
+			*/
+		}
+		break;
+
+		case FIELD_QCUR:
+		case FIELD_QMAX:
+		case FIELD_SCUR:
+		case FIELD_SMAX:
+		case FIELD_SLIM:
+		case FIELD_STOT:
+		case FIELD_BIN:
+		case FIELD_BOUT:
+		case FIELD_DREQ:
+		case FIELD_DRESP:
+		case FIELD_EREQ:
+		case FIELD_ECON:
+		case FIELD_ERESP:
+		case FIELD_WRETR:
+		case FIELD_WREDIS:
+		case FIELD_WEIGHT:
+		case FIELD_ACT:
+		case FIELD_BCK:
+		case FIELD_CHKFAIL:
+		case FIELD_CHKDOWN:
+		case FIELD_LASTCHG:
+		case FIELD_DOWNTIME:
+		case FIELD_QLIMIT:
+		case FIELD_PID:
+		case FIELD_IID:
+		case FIELD_SID:
+		case FIELD_THROTTLE:
+		case FIELD_LBTOT:
+		case FIELD_TRACKED:
+		case FIELD_TYPE:
+		error = l7stat_parse_signed_integer (integers + field, PARSER_STATE_PTRS);
+		break;
+	}
+
+	if (l7stat_parse_comma (PARSER_STATE_PTRS)) {
+		DEBUGMSGTL(("l7stat:error", "%s:%d: wanted comma in row of undetermined type, %s %s, field %d (row will not be included).\n", __func__, __LINE__, pxname, svname, field));
+		return l7stat_parse_attempt_to_continue_after_error (PARSER_STATE);
+	}
+
+	return l7stat_parse_early_field (field + 1, error, pxname, svname, PARSER_STATE);
+}
+
+static void l7stat_parse_stat_row (PARSER_STATE_DECL) {
+	for (;;) { // Look for the blank line that signifies EOF
+		token = cursor;
+		/*!re2c
+		'\n' { return; }
+		''   { break; }
+		*/
+	}
+	while (*cursor == '#') { // Consume lines starting with #
+		for (;;) {
+			token = cursor;
+			/*!re2c
+			'\n' { break; }
+			[^]  { continue; }
+			*/
+		}
+	}
+	return l7stat_parse_early_field (0, false, NULL, NULL, PARSER_STATE);
+}
+
+
+static void l7stat_parse_stat () {
+	struct sockaddr_un addr;
+	addr.sun_family = AF_UNIX;
+	strcpy (addr.sun_path, socket_path);
+
+	int fd;
+
+	if ((fd = socket (AF_UNIX, SOCK_STREAM, 0)) == -1) {
+		L7STAT_ERROR(ERR_CANNOT_CONNECT_SOCKET)
+		return;
+	}
+
+	if (connect (fd, (const struct sockaddr*) &addr, sizeof (struct sockaddr_un)) == -1) {
+		close (fd);
+		L7STAT_ERROR(ERR_CANNOT_CONNECT_CONNECT)
+		return;
+	}
+
+	if (write (fd, cmd_show_stat, sizeof cmd_show_stat) == sizeof cmd_show_stat) {
+		l7stat_parse_stat_row (fd, buffer, buffer, buffer, buffer);
+	} else {
+		L7STAT_ERROR(ERR_IO)
+	}
+
+	if (close (fd)) {
+		L7STAT_ERROR(ERR_IO)
+	}
+}
+
+// 2.6. Table Functions ///////////////////////////////////////////////
+
+// 2.6.1. Table Management ////////////////////////////////////////////
+
+static int l7stat_load_cache (
+		netsnmp_cache	*cache,
+		void		*magic) {
+	const time_t now = time (NULL);
+	if (now - last_updated < update_interval) {
+		return SNMP_ERR_NOERROR;
+	}
+
+	last_updated = now;
+	last_error = ERR_OKAY;
+
+	DEBUGMSGTL(("l7stat:cache", "%s:%d: clearing and reloading cache.\n", __func__, __LINE__));
+
+	while (first_proxy) {
+		release_proxy (&first_proxy);
+	}
+	while (first_frontend) {
+		release_frontend (&first_frontend);
+	}
+	while (first_backend) {
+		release_backend (&first_backend);
+	}
+	while (first_real_server) {
+		release_real_server (&first_real_server);
+	}
+
+	l7stat_parse_stat ();
+
+	sort_proxy (&first_proxy);
+	sort_frontend (&first_frontend);
+	sort_backend (&first_backend);
+	sort_real_server (&first_real_server);
+
+	return SNMP_ERR_NOERROR;
+}
+
+static netsnmp_variable_list * l7stat_proxy_next_entry (
+		void			**loop,
+		void			**data,
+		netsnmp_variable_list	 *index,
+		netsnmp_iterator_info	 *info) {
+	Proxy *proxy = *loop;
+
+	DEBUGMSGTL(("l7stat:proxyTable", "%s:%d: In func.\n", __func__, __LINE__));
+	if (proxy == NULL) {
+		DEBUGMSGTL(("l7stat:proxyTable", "%s:%d: No more proxies.\n", __func__, __LINE__));
+		*data = NULL;
+		return NULL;
+	}
+
+	*data = proxy;
+	*loop = proxy->next;
+
+	DEBUGMSGTL(("l7stat:proxyTable", "%s:%d: Got proxy %ld.\n", __func__, __LINE__, proxy->iid));
+	snmp_set_var_typed_integer (index, ASN_UNSIGNED, proxy->iid);
+
+	return index;
+}
+
+static netsnmp_variable_list * l7stat_proxy_first_entry (
+		void			**loop,
+		void			**data,
+		netsnmp_variable_list	 *index,
+		netsnmp_iterator_info	 *info) {
+	*loop = first_proxy;
+	return l7stat_proxy_next_entry (loop, data, index, info);
+}
+
+static netsnmp_variable_list * l7stat_frontend_next_entry (
+		void			**loop,
+		void			**data,
+		netsnmp_variable_list	 *index,
+		netsnmp_iterator_info	 *info) {
+	Frontend *frontend = *loop;
+
+	if (frontend == NULL) {
+		*data = NULL;
+		return NULL;
+	}
+
+	*data = frontend;
+	*loop = frontend->next;
+
+	if (frontend->common.proxy == NULL) {
+		// We can't create an index for this row.  Move on.
+		return l7stat_frontend_next_entry (loop, data, index, info);
+	}
+
+	snmp_set_var_typed_integer (index, ASN_UNSIGNED, frontend->common.proxy->iid);
+
+	return index;
+}
+
+static netsnmp_variable_list * l7stat_frontend_first_entry (
+		void			**loop,
+		void			**data,
+		netsnmp_variable_list	 *index,
+		netsnmp_iterator_info	 *info) {
+	*loop = first_frontend;
+	return l7stat_frontend_next_entry (loop, data, index, info);
+}
+
+static netsnmp_variable_list * l7stat_backend_next_entry (
+		void			**loop,
+		void			**data,
+		netsnmp_variable_list	 *index,
+		netsnmp_iterator_info	 *info) {
+	Backend *backend = *loop;
+
+	if (backend == NULL) {
+		*data = NULL;
+		return NULL;
+	}
+
+	*data = backend;
+	*loop = backend->next;
+
+	if (backend->common.proxy == NULL) {
+		// We can't create an index for this row.  Move on.
+		return l7stat_backend_next_entry (loop, data, index, info);
+	}
+
+	snmp_set_var_typed_integer (index, ASN_UNSIGNED, backend->common.proxy->iid);
+
+	return index;
+}
+
+static netsnmp_variable_list * l7stat_backend_first_entry (
+		void			**loop,
+		void			**data,
+		netsnmp_variable_list	 *index,
+		netsnmp_iterator_info	 *info) {
+	*loop = first_backend;
+	return l7stat_backend_next_entry (loop, data, index, info);
+}
+
+static netsnmp_variable_list * l7stat_real_server_next_entry (
+		void			**loop,
+		void			**data,
+		netsnmp_variable_list	 *index,
+		netsnmp_iterator_info	 *info) {
+	RealServer *real_server = *loop;
+
+	if (real_server == NULL) {
+		*data = NULL;
+		return NULL;
+	}
+
+	*data = real_server;
+	*loop = real_server->next;
+
+	if (real_server->common.proxy == NULL) {
+		// We can't create an index for this row.  Move on.
+		return l7stat_real_server_next_entry (loop, data, index, info);
+	}
+
+	snmp_set_var_typed_integer (index, ASN_UNSIGNED, real_server->common.proxy->iid);
+	snmp_set_var_typed_integer (index->next_variable, ASN_UNSIGNED, real_server->sid);
+
+	return index;
+}
+
+static netsnmp_variable_list * l7stat_real_server_first_entry (
+		void			**loop,
+		void			**data,
+		netsnmp_variable_list	 *index,
+		netsnmp_iterator_info	 *info) {
+	*loop = first_real_server;
+	return l7stat_real_server_next_entry (loop, data, index, info);
+}
+
+// 2.6.2. Table Handlers //////////////////////////////////////////////
+
+static int l7stat_handle_scalars (
+		netsnmp_mib_handler		*handler,
+		netsnmp_handler_registration	*reginfo,
+		netsnmp_agent_request_info	*reqinfo,
+		netsnmp_request_info		*requests) {
+	const oid id = requests->requestvb->name [requests->requestvb->name_length - 2];
+
+	DEBUGMSGTL(("l7stat:handle_scalars", "%s:%d: handling request for scalar %lu.\n", __func__, __LINE__, id));
+
+	if (reqinfo->mode != MODE_GET) {
+		/* we should never get here, so this is a really bad error */
+		DEBUGMSGTL(("l7stat:handle_scalars", "%s:%d: invalid mode for request.\n", __func__, __LINE__));
+		return SNMP_ERR_GENERR;
+	}
+
+	switch (id) {
+		case SCALAR_LAST_UPDATED:
+		snmp_set_var_typed_integer (
+			requests->requestvb,
+			ASN_TIMETICKS,
+			last_updated * 1000
+		);
+		break;
+
+		case SCALAR_UPDATE_INTERVAL:
+		snmp_set_var_typed_integer (
+			requests->requestvb,
+			ASN_UNSIGNED,
+			update_interval * 1000
+		);
+		break;
+
+		case SCALAR_LAST_ERROR:
+		snmp_set_var_typed_integer (
+			requests->requestvb,
+			ASN_UNSIGNED,
+			last_error
+		);
+		break;
+	}
+	return SNMP_ERR_NOERROR;
+}
+
+static int l7stat_handle_proxies (
+		netsnmp_mib_handler		*handler,
+		netsnmp_handler_registration	*reginfo,
+		netsnmp_agent_request_info	*reqinfo,
+		netsnmp_request_info		*requests) {
+
+	DEBUGMSGTL(("l7stat:proxyTable", "%s:%d: In func.\n", __func__, __LINE__));
+	if (reqinfo->mode != MODE_GET) {
+		DEBUGMSGTL(("l7stat:proxyTable", "%s:%d: Wrong mode.\n", __func__, __LINE__));
+		return SNMP_ERR_NOERROR;
+	}
+
+	for (netsnmp_request_info *req = requests; req; req = req->next) {
+		netsnmp_table_request_info *table_info = netsnmp_extract_table_info (req);
+		Proxy *p = netsnmp_extract_iterator_context (req);
+
+		if (p == NULL) {
+			DEBUGMSGTL(("l7stat:proxyTable", "%s:%d: no data.\n", __func__, __LINE__));
+			netsnmp_set_request_error (
+				reqinfo,
+				req,
+				SNMP_NOSUCHINSTANCE
+			);
+			continue;
+		}
+
+		DEBUGMSGTL(("l7stat:proxyTable", "%s:%d: want column %d for %ld, %s.\n", __func__, __LINE__, table_info->colnum, p->iid, p->pxname));
+		switch (table_info->colnum) {
+			case PROXY_IID:
+			SEND_UNSIGNED (p->iid);
+			break;
+
+			case PROXY_PXNAME:
+			SEND_OCTET_STR (p->pxname,
+					p->pxname
+						? strlen (p->pxname)
+						: 0);
+			break;
+		}
+	}
+	return SNMP_ERR_NOERROR;
+}
+
+
+static int l7stat_handle_real_servers (
+		netsnmp_mib_handler		*handler,
+		netsnmp_handler_registration	*reginfo,
+		netsnmp_agent_request_info	*reqinfo,
+		netsnmp_request_info		*requests) {
+
+	if (reqinfo->mode != MODE_GET) {
+		return SNMP_ERR_NOERROR;
+	}
+
+	for (netsnmp_request_info *req = requests; req; req = req->next) {
+		netsnmp_table_request_info *table_info = netsnmp_extract_table_info (req);
+		RealServer *r = netsnmp_extract_iterator_context (req);
+
+		if (r == NULL) {
+			netsnmp_set_request_error (
+				reqinfo,
+				req,
+				SNMP_NOSUCHINSTANCE
+			);
+			continue;
+		}
+
+		switch (table_info->colnum) {
+			case REAL_SERVER_IID:
+			SEND_UNSIGNED (r->common.proxy->iid);
+			break;
+
+			case REAL_SERVER_SID:
+			SEND_UNSIGNED (r->sid);
+			break;
+
+			case REAL_SERVER_PXNAME:
+			SEND_OCTET_STR (r->common.proxy->pxname,
+					r->common.proxy->pxname
+						? strlen (r->common.proxy->pxname)
+						: 0);
+			break;
+
+			case REAL_SERVER_SVNAME:
+			SEND_OCTET_STR (r->svname,
+					r->svname
+						? strlen (r->svname)
+						: 0);
+			break;
+
+			case REAL_SERVER_SCUR:
+			SEND_UNSIGNED (r->common.scur);
+			break;
+
+			case REAL_SERVER_SMAX:
+			SEND_UNSIGNED (r->common.smax);
+			break;
+
+			case REAL_SERVER_SLIM:
+			SEND_UNSIGNED (r->common.slim);
+			break;
+
+			case REAL_SERVER_STOT:
+			SEND_COUNTER (r->common.stot);
+			break;
+
+			case REAL_SERVER_BIN:
+			SEND_COUNTER (r->common.bin);
+			break;
+
+			case REAL_SERVER_BOUT:
+			SEND_COUNTER (r->common.bout);
+			break;
+
+			case REAL_SERVER_DRESP:
+			SEND_COUNTER (r->common.dresp);
+			break;
+
+			case REAL_SERVER_STATUS:
+			SEND_INTEGER (r->common.status);
+			break;
+
+			case REAL_SERVER_PID:
+			SEND_UNSIGNED (r->common.pid);
+			break;
+
+			case REAL_SERVER_RATE:
+			SEND_UNSIGNED (r->common.rate);
+			break;
+
+			case REAL_SERVER_RATE_MAX:
+			SEND_UNSIGNED (r->common.rate_max);
+			break;
+
+			case REAL_SERVER_HRSP_1XX:
+			SEND_COUNTER (r->common.hrsp_1xx);
+			break;
+
+			case REAL_SERVER_HRSP_2XX:
+			SEND_COUNTER (r->common.hrsp_2xx);
+			break;
+
+			case REAL_SERVER_HRSP_3XX:
+			SEND_COUNTER (r->common.hrsp_3xx);
+			break;
+
+			case REAL_SERVER_HRSP_4XX:
+			SEND_COUNTER (r->common.hrsp_4xx);
+			break;
+
+			case REAL_SERVER_HRSP_5XX:
+			SEND_COUNTER (r->common.hrsp_5xx);
+			break;
+
+			case REAL_SERVER_HRSP_OTHER:
+			SEND_COUNTER (r->common.hrsp_other);
+			break;
+
+			case REAL_SERVER_MODE:
+			SEND_INTEGER (r->common.mode);
+			break;
+
+			case REAL_SERVER_QCUR:
+			SEND_UNSIGNED (r->qcur);
+			break;
+
+			case REAL_SERVER_QMAX:
+			SEND_UNSIGNED (r->qmax);
+			break;
+
+			case REAL_SERVER_ECON:
+			SEND_COUNTER (r->econ);
+			break;
+
+			case REAL_SERVER_ERESP:
+			SEND_COUNTER (r->eresp);
+			break;
+
+			case REAL_SERVER_WRETR:
+			SEND_COUNTER (r->wretr);
+			break;
+
+			case REAL_SERVER_WREDIS:
+			SEND_COUNTER (r->wredis);
+			break;
+
+			case REAL_SERVER_WEIGHT:
+			SEND_UNSIGNED (r->weight);
+			break;
+
+			case REAL_SERVER_ACT:
+			SEND_INTEGER (r->act + 1);
+			break;
+
+			case REAL_SERVER_BCK:
+			SEND_INTEGER (r->bck + 1);
+			break;
+
+			case REAL_SERVER_CHKFAIL:
+			SEND_COUNTER (r->chkfail);
+			break;
+
+			case REAL_SERVER_CHKDOWN:
+			SEND_COUNTER (r->chkdown);
+			break;
+
+			case REAL_SERVER_LASTCHG:
+			SEND_TIMEINTERVAL_SEC (r->lastchg);
+			break;
+
+			case REAL_SERVER_DOWNTIME:
+			SEND_TIMEINTERVAL_SEC (r->downtime);
+			break;
+
+			case REAL_SERVER_QLIMIT:
+			SEND_UNSIGNED (r->qlimit);
+			break;
+
+			case REAL_SERVER_THROTTLE:
+			SEND_UNSIGNED (r->throttle);
+			break;
+
+			case REAL_SERVER_LBTOT:
+			SEND_COUNTER (r->lbtot);
+			break;
+
+			case REAL_SERVER_TRACKED:
+			SEND_INTEGER (r->tracked);
+			break;
+
+			case REAL_SERVER_CHECK_STATUS:
+			SEND_INTEGER (r->check_status);
+			break;
+
+			case REAL_SERVER_CHECK_CODE:
+			SEND_INTEGER (r->check_code);
+			break;
+
+			case REAL_SERVER_CHECK_DURATION:
+			SEND_TIMEINTERVAL_SEC (r->check_duration);
+			break;
+
+			case REAL_SERVER_HANAFAIL:
+			SEND_INTEGER (r->hanafail);
+			break;
+
+			case REAL_SERVER_CLI_ABRT:
+			SEND_COUNTER (r->cli_abrt);
+			break;
+
+			case REAL_SERVER_SRV_ABRT:
+			SEND_COUNTER (r->srv_abrt);
+			break;
+
+			case REAL_SERVER_LASTSESS:
+			if (r->lastsess < 0) {
+				netsnmp_set_request_error (
+					reqinfo,
+					req,
+					SNMP_NOSUCHINSTANCE
+				);
+				continue;
+			}
+			SEND_TIMEINTERVAL_SEC (r->lastsess);
+			break;
+
+			case REAL_SERVER_LAST_CHK:
+			SEND_OCTET_STR (r->last_chk,
+					r->last_chk
+						? strlen (r->last_chk)
+						: 0);
+			break;
+
+			case REAL_SERVER_LAST_AGT:
+			SEND_OCTET_STR (r->last_agt,
+					r->last_agt
+						? strlen (r->last_agt)
+						: 0);
+			break;
+
+			case REAL_SERVER_QTIME:
+			SEND_TIMEINTERVAL_SEC (r->qtime);
+			break;
+
+			case REAL_SERVER_CTIME:
+			SEND_TIMEINTERVAL_SEC (r->ctime);
+			break;
+
+			case REAL_SERVER_RTIME:
+			SEND_TIMEINTERVAL_SEC (r->rtime);
+			break;
+
+			case REAL_SERVER_TTIME:
+			SEND_TIMEINTERVAL_SEC (r->ttime);
+			break;
+
+			case REAL_SERVER_AGENT_STATUS:
+			SEND_INTEGER (r->agent_status);
+			break;
+
+			/* HAProxy documentation lists this as "unused for now" */
+			case REAL_SERVER_AGENT_CODE:
+			SEND_UNSIGNED (r->agent_code);
+			break;
+
+			case REAL_SERVER_AGENT_DURATION:
+			SEND_TIMEINTERVAL_SEC (r->agent_duration);
+			break;
+
+			case REAL_SERVER_CHECK_DESC:
+			SEND_OCTET_STR (r->check_desc,
+					r->check_desc
+						? strlen (r->check_desc)
+						: 0);
+			break;
+
+			case REAL_SERVER_AGENT_DESC:
+			SEND_OCTET_STR (r->agent_desc,
+					r->agent_desc
+						? strlen (r->agent_desc)
+						: 0);
+			break;
+
+			case REAL_SERVER_CHECK_RISE:
+			SEND_UNSIGNED (r->check_rise);
+			break;
+
+			case REAL_SERVER_CHECK_FALL:
+			SEND_UNSIGNED (r->check_fall);
+			break;
+
+			case REAL_SERVER_CHECK_HEALTH:
+			SEND_UNSIGNED (r->check_health);
+			break;
+
+			case REAL_SERVER_AGENT_RISE:
+			SEND_UNSIGNED (r->agent_rise);
+			break;
+
+			case REAL_SERVER_AGENT_FALL:
+			SEND_UNSIGNED (r->agent_fall);
+			break;
+
+			case REAL_SERVER_AGENT_HEALTH:
+			SEND_UNSIGNED (r->agent_health);
+			break;
+
+			case REAL_SERVER_COOKIE:
+			SEND_OCTET_STR (r->cookie,
+					r->cookie
+						? strlen (r->cookie)
+						: 0);
+			break;
+
+			case REAL_SERVER_ADDRESS_TYPE:
+			SEND_INTEGER (r->address.type);
+			break;
+
+			case REAL_SERVER_ADDRESS_OCTETS:
+			SEND_OCTET_STR (r->address.octets,
+						address_length [r->address.type]);
+			break;
+
+			case REAL_SERVER_ADDRESS_PORT:
+			SEND_UNSIGNED (r->address.port);
+			break;
+		}
+	}
+	return SNMP_ERR_NOERROR;
+}
+
+static int l7stat_handle_frontends (
+		netsnmp_mib_handler *handler,
+		netsnmp_handler_registration *reginfo,
+		netsnmp_agent_request_info *reqinfo,
+		netsnmp_request_info *requests) {
+
+	if (reqinfo->mode != MODE_GET) {
+		return SNMP_ERR_NOERROR;
+	}
+
+	for (netsnmp_request_info *req = requests; req; req = req->next) {
+		netsnmp_table_request_info *table_info = netsnmp_extract_table_info (req);
+		Frontend *frontend = netsnmp_extract_iterator_context (req);
+
+		if (frontend == NULL) {
+			netsnmp_set_request_error (
+				reqinfo,
+				req,
+				SNMP_NOSUCHINSTANCE
+			);
+			continue;
+		}
+
+		switch (table_info->colnum) {
+			case FRONTEND_IID:
+			SEND_UNSIGNED (frontend->common.proxy->iid);
+			break;
+
+			case FRONTEND_PXNAME:
+			SEND_OCTET_STR (frontend->common.proxy->pxname,
+					frontend->common.proxy->pxname
+						? strlen (frontend->common.proxy->pxname)
+						: 0);
+			break;
+
+			case FRONTEND_SCUR:
+			SEND_UNSIGNED (frontend->common.scur);
+			break;
+
+			case FRONTEND_SMAX:
+			SEND_UNSIGNED (frontend->common.smax);
+			break;
+
+			case FRONTEND_SLIM:
+			SEND_UNSIGNED (frontend->common.slim);
+			break;
+
+			case FRONTEND_STOT:
+			SEND_COUNTER (frontend->common.stot);
+			break;
+
+			case FRONTEND_BIN:
+			SEND_COUNTER (frontend->common.bin);
+			break;
+
+			case FRONTEND_BOUT:
+			SEND_COUNTER (frontend->common.bout);
+			break;
+
+			case FRONTEND_DRESP:
+			SEND_COUNTER (frontend->common.dresp);
+			break;
+
+			case FRONTEND_STATUS:
+			SEND_INTEGER (frontend->common.status);
+			break;
+
+			case FRONTEND_PID:
+			SEND_UNSIGNED (frontend->common.pid);
+			break;
+
+			case FRONTEND_RATE:
+			SEND_UNSIGNED (frontend->common.rate);
+			break;
+
+			case FRONTEND_RATE_MAX:
+			SEND_UNSIGNED (frontend->common.rate_max);
+			break;
+
+			case FRONTEND_HRSP_1XX:
+			SEND_COUNTER (frontend->common.hrsp_1xx);
+			break;
+
+			case FRONTEND_HRSP_2XX:
+			SEND_COUNTER (frontend->common.hrsp_2xx);
+			break;
+
+			case FRONTEND_HRSP_3XX:
+			SEND_COUNTER (frontend->common.hrsp_3xx);
+			break;
+
+			case FRONTEND_HRSP_4XX:
+			SEND_COUNTER (frontend->common.hrsp_4xx);
+			break;
+
+			case FRONTEND_HRSP_5XX:
+			SEND_COUNTER (frontend->common.hrsp_5xx);
+			break;
+
+			case FRONTEND_HRSP_OTHER:
+			SEND_COUNTER (frontend->common.hrsp_other);
+			break;
+
+			case FRONTEND_MODE:
+			SEND_INTEGER (frontend->common.mode);
+			break;
+
+			case FRONTEND_DREQ:
+			SEND_COUNTER (frontend->dreq);
+			break;
+
+			case FRONTEND_EREQ:
+			SEND_COUNTER (frontend->ereq);
+			break;
+
+			case FRONTEND_RATE_LIM:
+			SEND_UNSIGNED (frontend->rate_lim);
+			break;
+
+			case FRONTEND_REQ_RATE:
+			SEND_UNSIGNED (frontend->req_rate);
+			break;
+
+			case FRONTEND_REQ_RATE_MAX:
+			SEND_UNSIGNED (frontend->req_rate_max);
+			break;
+
+			case FRONTEND_REQ_TOT:
+			SEND_COUNTER (frontend->req_tot);
+			break;
+
+			case FRONTEND_COMP_IN:
+			SEND_COUNTER (frontend->comp_in);
+			break;
+
+			case FRONTEND_COMP_OUT:
+			SEND_COUNTER (frontend->comp_out);
+			break;
+
+			case FRONTEND_COMP_BYP:
+			SEND_COUNTER (frontend->comp_byp);
+			break;
+
+			case FRONTEND_COMP_RSP:
+			SEND_COUNTER (frontend->comp_rsp);
+			break;
+
+			case FRONTEND_CONN_RATE:
+			SEND_UNSIGNED (frontend->conn_rate);
+			break;
+
+			case FRONTEND_CONN_RATE_MAX:
+			SEND_UNSIGNED (frontend->conn_rate_max);
+			break;
+
+			case FRONTEND_CONN_TOT:
+			SEND_COUNTER (frontend->conn_tot);
+			break;
+
+			case FRONTEND_INTERCEPTED:
+			SEND_COUNTER (frontend->intercepted);
+			break;
+
+			case FRONTEND_DCON:
+			SEND_COUNTER (frontend->dcon);
+			break;
+
+			case FRONTEND_DSES:
+			SEND_COUNTER (frontend->dses);
+			break;
+		}
+	}
+	return SNMP_ERR_NOERROR;
+}
+
+static int l7stat_handle_backends (
+		netsnmp_mib_handler *handler,
+		netsnmp_handler_registration *reginfo,
+		netsnmp_agent_request_info *reqinfo,
+		netsnmp_request_info *requests) {
+
+	for (netsnmp_request_info *req = requests; req; req = req->next) {
+		netsnmp_table_request_info *table_info = netsnmp_extract_table_info (req);
+		Backend *backend = netsnmp_extract_iterator_context (req);
+
+		if (backend == NULL) {
+			netsnmp_set_request_error (
+				reqinfo,
+				req,
+				SNMP_NOSUCHINSTANCE
+			);
+			continue;
+		}
+
+		switch (table_info->colnum) {
+			case BACKEND_IID:
+			SEND_UNSIGNED (backend->common.proxy->iid);
+			break;
+
+			case BACKEND_PXNAME:
+			SEND_OCTET_STR (backend->common.proxy->pxname,
+					backend->common.proxy->pxname
+						? strlen (backend->common.proxy->pxname)
+						: 0);
+			break;
+
+			case BACKEND_SCUR:
+			SEND_UNSIGNED (backend->common.scur);
+			break;
+
+			case BACKEND_SMAX:
+			SEND_UNSIGNED (backend->common.smax);
+			break;
+
+			case BACKEND_SLIM:
+			SEND_UNSIGNED (backend->common.slim);
+			break;
+
+			case BACKEND_STOT:
+			SEND_COUNTER (backend->common.stot);
+			break;
+
+			case BACKEND_BIN:
+			SEND_COUNTER (backend->common.bin);
+			break;
+
+			case BACKEND_BOUT:
+			SEND_COUNTER (backend->common.bout);
+			break;
+
+			case BACKEND_DRESP:
+			SEND_COUNTER (backend->common.dresp);
+			break;
+
+			case BACKEND_STATUS:
+			SEND_INTEGER (backend->common.status);
+			break;
+
+			case BACKEND_PID:
+			SEND_UNSIGNED (backend->common.pid);
+			break;
+
+			case BACKEND_RATE:
+			SEND_UNSIGNED (backend->common.rate);
+			break;
+
+			case BACKEND_RATE_MAX:
+			SEND_UNSIGNED (backend->common.rate_max);
+			break;
+
+			case BACKEND_HRSP_1XX:
+			SEND_COUNTER (backend->common.hrsp_1xx);
+			break;
+
+			case BACKEND_HRSP_2XX:
+			SEND_COUNTER (backend->common.hrsp_2xx);
+			break;
+
+			case BACKEND_HRSP_3XX:
+			SEND_COUNTER (backend->common.hrsp_3xx);
+			break;
+
+			case BACKEND_HRSP_4XX:
+			SEND_COUNTER (backend->common.hrsp_4xx);
+			break;
+
+			case BACKEND_HRSP_5XX:
+			SEND_COUNTER (backend->common.hrsp_5xx);
+			break;
+
+			case BACKEND_HRSP_OTHER:
+			SEND_COUNTER (backend->common.hrsp_other);
+			break;
+
+			case BACKEND_MODE:
+			SEND_INTEGER (backend->common.mode);
+			break;
+
+			case BACKEND_QCUR:
+			SEND_COUNTER (backend->qcur);
+			break;
+
+			case BACKEND_QMAX:
+			SEND_UNSIGNED (backend->qmax);
+			break;
+
+			case BACKEND_DREQ:
+			SEND_COUNTER (backend->dreq);
+			break;
+
+			case BACKEND_ECON:
+			SEND_COUNTER (backend->econ);
+			break;
+
+			case BACKEND_ERESP:
+			SEND_COUNTER (backend->eresp);
+			break;
+
+			case BACKEND_WRETR:
+			SEND_COUNTER (backend->wretr);
+			break;
+
+			case BACKEND_WREDIS:
+			SEND_COUNTER (backend->wredis);
+			break;
+
+			case BACKEND_WEIGHT:
+			SEND_UNSIGNED (backend->weight);
+			break;
+
+			case BACKEND_ACT:
+			SEND_INTEGER (backend->act);
+			break;
+
+			case BACKEND_BCK:
+			SEND_INTEGER (backend->bck);
+			break;
+
+			case BACKEND_CHKDOWN:
+			SEND_COUNTER (backend->chkdown);
+			break;
+
+			case BACKEND_LASTCHG:
+			SEND_TIMEINTERVAL_SEC (backend->lastchg);
+			break;
+
+			case BACKEND_DOWNTIME:
+			SEND_TIMEINTERVAL_SEC (backend->downtime);
+			break;
+
+			case BACKEND_LBTOT:
+			SEND_COUNTER (backend->lbtot);
+			break;
+
+			case BACKEND_REQ_TOT:
+			SEND_COUNTER (backend->req_tot);
+			break;
+
+			case BACKEND_CLI_ABRT:
+			SEND_COUNTER (backend->cli_abrt);
+			break;
+
+			case BACKEND_SRV_ABRT:
+			SEND_COUNTER (backend->srv_abrt);
+			break;
+
+			case BACKEND_COMP_IN:
+			SEND_COUNTER (backend->comp_in);
+			break;
+
+			case BACKEND_COMP_OUT:
+			SEND_COUNTER (backend->comp_out);
+			break;
+
+			case BACKEND_COMP_BYP:
+			SEND_COUNTER (backend->comp_byp);
+			break;
+
+			case BACKEND_COMP_RSP:
+			SEND_COUNTER (backend->comp_rsp);
+			break;
+
+			case BACKEND_LASTSESS:
+			if (backend->lastsess < 0) {
+				netsnmp_set_request_error (
+					reqinfo,
+					req,
+					SNMP_NOSUCHINSTANCE
+				);
+				continue;
+			}
+			SEND_TIMEINTERVAL_SEC (backend->lastsess);
+			break;
+
+			case BACKEND_QTIME:
+			SEND_TIMEINTERVAL_SEC (backend->qtime);
+			break;
+
+			case BACKEND_CTIME:
+			SEND_TIMEINTERVAL_SEC (backend->ctime);
+			break;
+
+			case BACKEND_RTIME:
+			SEND_TIMEINTERVAL_SEC (backend->rtime);
+			break;
+
+			case BACKEND_TTIME:
+			SEND_TIMEINTERVAL_SEC (backend->ttime);
+			break;
+
+			case BACKEND_COOKIE:
+			SEND_OCTET_STR (backend->cookie,
+				backend->cookie 
+					? strlen (backend->cookie)
+					: 0);
+			break;
+
+			case BACKEND_ALGO:
+			SEND_INTEGER (backend->algo);
+			break;
+
+			case BACKEND_INTERCEPTED:
+			SEND_COUNTER (backend->intercepted);
+			break;
+		}
+	}
+	return SNMP_ERR_NOERROR;
+}
+
+// 2.7. Module Init ///////////////////////////////////////////////////
+
+void init_l7stat (void) {
+	DEBUGMSGTL(("l7stat:info", "Initializing\n"));
+
+	// Initialise globals
+	last_error        = ERR_OKAY;
+	last_updated      = 0;
+	update_interval   = 4;
+	first_frontend    = NULL;
+	free_frontends    = NULL;
+	first_backend     = NULL;
+	free_backends     = NULL;
+	first_real_server = NULL;
+	free_real_servers = NULL;
+	socket_path	  = HAPROXY_SOCKET_PATH;
+
+	// Create handler for Scalars
+	netsnmp_register_scalar_group (
+		netsnmp_create_handler_registration (
+			"l7stat_scalars", l7stat_handle_scalars,
+			l7stat_oid, OID_LENGTH (l7stat_oid),
+			HANDLER_CAN_RONLY
+		), 1, 3
+	);
+
+	// Create handler for l7ProxyTable
+	netsnmp_iterator_info *p_iinfo = SNMP_MALLOC_TYPEDEF (netsnmp_iterator_info);
+	p_iinfo->table_reginfo = SNMP_MALLOC_TYPEDEF (netsnmp_table_registration_info);
+
+	p_iinfo->table_reginfo->min_column = 1;
+	p_iinfo->table_reginfo->max_column = 2;
+	p_iinfo->get_first_data_point = l7stat_proxy_first_entry;
+	p_iinfo->get_next_data_point = l7stat_proxy_next_entry;
+	p_iinfo->flags = 0; // NETSNMP_ITERATOR_FLAG_SORTED
+
+	netsnmp_table_helper_add_indexes (p_iinfo->table_reginfo, ASN_UNSIGNED, 0);
+
+	netsnmp_handler_registration *p_reginfo = netsnmp_create_handler_registration (
+		"l7stat_proxies", l7stat_handle_proxies,
+		l7stat_proxies_oid, OID_LENGTH (l7stat_proxies_oid),
+		HANDLER_CAN_RONLY
+	);
+
+	netsnmp_register_table_iterator (p_reginfo, p_iinfo);
+	netsnmp_inject_handler (
+		p_reginfo,
+		netsnmp_get_cache_handler (
+			-1,
+			l7stat_load_cache,
+			NULL,
+			l7stat_proxies_oid,
+			OID_LENGTH (l7stat_proxies_oid)
+		)
+	);
+
+	// Create handler for L7FrontendTable
+	netsnmp_iterator_info *fe_iinfo = SNMP_MALLOC_TYPEDEF (netsnmp_iterator_info);
+	fe_iinfo->table_reginfo = SNMP_MALLOC_TYPEDEF (netsnmp_table_registration_info);
+
+	fe_iinfo->table_reginfo->min_column = 1;
+	fe_iinfo->table_reginfo->max_column = 36;
+	fe_iinfo->get_first_data_point = l7stat_frontend_first_entry;
+	fe_iinfo->get_next_data_point = l7stat_frontend_next_entry;
+	fe_iinfo->flags = 0; // NETSNMP_ITERATOR_FLAG_SORTED
+
+	netsnmp_table_helper_add_indexes (fe_iinfo->table_reginfo, ASN_UNSIGNED, 0);
+
+	netsnmp_handler_registration *fe_reginfo = netsnmp_create_handler_registration (
+		"l7stat_frontends", l7stat_handle_frontends,
+		l7stat_frontends_oid, OID_LENGTH (l7stat_frontends_oid),
+		HANDLER_CAN_RONLY
+	);
+
+	netsnmp_register_table_iterator (fe_reginfo, fe_iinfo);
+	netsnmp_inject_handler (
+		fe_reginfo,
+		netsnmp_get_cache_handler (
+			-1,
+			l7stat_load_cache,
+			NULL,
+			l7stat_frontends_oid,
+			OID_LENGTH (l7stat_frontends_oid)
+		)
+	);
+
+	// Create handler for L7BackendTable
+	netsnmp_iterator_info *be_iinfo = SNMP_MALLOC_TYPEDEF (netsnmp_iterator_info);
+	be_iinfo->table_reginfo = SNMP_MALLOC_TYPEDEF (netsnmp_table_registration_info);
+
+	be_iinfo->table_reginfo->min_column = 1;
+	be_iinfo->table_reginfo->max_column = 48;
+	be_iinfo->get_first_data_point = l7stat_backend_first_entry;
+	be_iinfo->get_next_data_point = l7stat_backend_next_entry;
+	be_iinfo->flags = 0; // NETSNMP_ITERATOR_FLAG_SORTED
+
+	netsnmp_table_helper_add_indexes (be_iinfo->table_reginfo, ASN_UNSIGNED, 0);
+
+	netsnmp_handler_registration *be_reginfo = netsnmp_create_handler_registration (
+		"l7stat_backends", l7stat_handle_backends,
+		l7stat_backends_oid, OID_LENGTH (l7stat_backends_oid),
+		HANDLER_CAN_RONLY
+	);
+
+	netsnmp_register_table_iterator (be_reginfo, be_iinfo);
+	netsnmp_inject_handler (
+		be_reginfo,
+		netsnmp_get_cache_handler (
+			-1,
+			l7stat_load_cache,
+			NULL,
+			l7stat_backends_oid,
+			OID_LENGTH (l7stat_backends_oid)
+		)
+	);
+
+	// Create handler for L7RealServersTable
+	netsnmp_iterator_info *rs_iinfo = SNMP_MALLOC_TYPEDEF (netsnmp_iterator_info);
+	rs_iinfo->table_reginfo = SNMP_MALLOC_TYPEDEF (netsnmp_table_registration_info);
+
+	rs_iinfo->table_reginfo->min_column = 1;
+	rs_iinfo->table_reginfo->max_column = 67;
+	rs_iinfo->get_first_data_point = l7stat_real_server_first_entry;
+	rs_iinfo->get_next_data_point = l7stat_real_server_next_entry;
+	rs_iinfo->flags = 0; // NETSNMP_ITERATOR_FLAG_SORTED
+
+	netsnmp_table_helper_add_indexes (rs_iinfo->table_reginfo,
+		ASN_UNSIGNED,
+		ASN_UNSIGNED,
+		0);
+
+	netsnmp_handler_registration *rs_reginfo = netsnmp_create_handler_registration (
+		"l7stat_real_servers", l7stat_handle_real_servers,
+		l7stat_real_servers_oid, OID_LENGTH (l7stat_real_servers_oid),
+		HANDLER_CAN_RONLY
+	);
+
+	netsnmp_register_table_iterator (rs_reginfo, rs_iinfo);
+	netsnmp_inject_handler (
+		rs_reginfo,
+		netsnmp_get_cache_handler (
+			-1,
+			l7stat_load_cache,
+			NULL,
+			l7stat_real_servers_oid,
+			OID_LENGTH (l7stat_real_servers_oid)
+		)
+	);
+}
+
+/* vim: set filetype=c: */

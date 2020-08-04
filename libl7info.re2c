@@ -1,0 +1,703 @@
+/*
+ *  _    ___   ___  ___  ___
+ * | |  | _ ) / _ \| _ \/ __|
+ * | |__| _ \| (_) |   / (_ |
+ * |____|___(_)___/|_|_\\___|
+ *       Loadbalancer.org Layer 7 Info Agent
+ * Copyright (c) 2020 Loadbalancer.org Ltd.
+ *
+ * 2020-04-13: Peter Statham: Initial Release.
+ *
+ */
+
+/*
+ * TODO:
+ *   + Switch back to Counter64/Integer64/et al.
+ *   + Comment/Document Code
+ *   + Switch to using the cache helper for consistency with libL7Stat.so
+ *   + Review Debug tokens
+ *   + Add more debug messages
+ */
+
+#include <net-snmp/net-snmp-config.h>
+#include <net-snmp/net-snmp-includes.h>
+#include <net-snmp/agent/net-snmp-agent-includes.h>
+#include <assert.h>
+
+// Macros
+#define ERR_OKAY			0
+#define ERR_CANNOT_CONNECT_SOCKET	1
+#define ERR_CANNOT_CONNECT_CONNECT	2
+#define ERR_EXPECTED_EOL_AFTER_INTEGER	3
+#define ERR_EXPECTED_EOL_AFTER_STRING	4
+#define ERR_EXPECTED_COLON_AFTER_LABEL	5
+#define ERR_UNKNOWN_LABEL		6
+#define ERR_EOF				7
+#define ERR_IO				8
+
+#define YYCTYPE		char
+#define YYMARKER	marker
+#define YYCURSOR	cursor
+#define YYLIMIT		limit
+#define YYFILL(x)	yyfill (x, fd, &token, &marker, &cursor, &limit)
+
+// The size of the different portions of our virtual address space.
+#define COMPUTED 3
+#define INTEGER_LABELS (sizeof integer_labels / sizeof *integer_labels)
+#define COUNTER_LABELS (sizeof counter_labels / sizeof *counter_labels)
+#define GAUGE_LABELS (sizeof gauge_labels / sizeof *gauge_labels)
+#define STRING_LABELS (sizeof string_labels / sizeof *string_labels)
+
+// Identifiers for fields in our virtual address space (should match the order
+// of the labels in the string, integer, counter and gague arrays)
+#define COMPUTED_LAST_POLLED			 0
+#define COMPUTED_UPDATE_INTERVAL		 1
+#define COMPUTED_LAST_ERROR			 2
+#define STRING_VERSION				 3
+#define STRING_UPTIME				 4
+#define STRING_RELEASE_DATE			 5
+#define STRING_NODE				 6
+#define STRING_NAME				 7
+#define INTEGER_ULIMIT_N			 8
+#define INTEGER_STOPPING			 9
+#define INTEGER_PROCESS_NUM			10
+#define INTEGER_PID				11
+#define COUNTER_UPTIME_SEC			12
+#define COUNTER_SSLCACHEMISSES			13
+#define COUNTER_SSLCACHELOOKUPS			14
+#define COUNTER_CUMSSLCONNS			15
+#define COUNTER_CUMREQ				16
+#define COUNTER_CUMCONNS			17
+#define COUNTER_COMPRESSBPSOUT			18
+#define COUNTER_COMPRESSBPSIN			19
+#define GAUGE_ZLIBMEMUSAGE			20
+#define GAUGE_TASKS				21
+#define GAUGE_SSLRATELIMIT			22
+#define GAUGE_SSLRATE				23
+#define GAUGE_SSLFRONTENDSESSIONREUSE_PCT	24
+#define GAUGE_SSLFRONTENDMAXKEYRATE		25
+#define GAUGE_SSLFRONTENDKEYRATE		26
+#define GAUGE_SSLBACKENDMAXKEYRATE		27
+#define GAUGE_SSLBACKENDKEYRATE			28
+#define GAUGE_SESSRATELIMIT			29
+#define GAUGE_SESSRATE				30
+#define GAUGE_RUN_QUEUE				31
+#define GAUGE_POOLUSED_MB			32
+#define GAUGE_POOLFAILED			33
+#define GAUGE_POOLALLOC_MB			34
+#define GAUGE_PIPESUSED				35
+#define GAUGE_PIPESFREE				36
+#define GAUGE_NBTHREAD				37
+#define GAUGE_NBPROC				38
+#define GAUGE_MEMMAX_MB				39
+#define GAUGE_MAXZLIBMEMUSAGE			40
+#define GAUGE_MAXSSLRATE			41
+#define GAUGE_MAXSSLCONNS			42
+#define GAUGE_MAXSOCK				43
+#define GAUGE_MAXSESSRATE			44
+#define GAUGE_MAXPIPES				45
+#define GAUGE_MAXCONNRATE			46
+#define GAUGE_MAXCONN				47
+#define GAUGE_LISTENERS				48
+#define GAUGE_JOBS				49
+#define GAUGE_IDLE_PCT				50
+#define GAUGE_HARD_MAXCONN			51
+#define GAUGE_CURRSSLCONNS			52
+#define GAUGE_CURRCONNS				53
+#define GAUGE_CONNRATELIMIT			54
+#define GAUGE_CONNRATE				55
+#define GAUGE_COMPRESSBPSRATELIM		56
+
+// Constant Data
+const char label_name[]				= "Name";
+const char label_version[]			= "Version";
+const char label_release_date[]			= "Release_date";
+const char label_uptime[]			= "Uptime";
+const char label_node[]				= "node";
+const char label_nbthread[]			= "Nbthread";
+const char label_nbproc[]			= "Nbproc";
+const char label_process_num[]			= "Process_num";
+const char label_pid[]				= "Pid";
+const char label_uptime_sec[]			= "Uptime_sec";
+const char label_memmax_mb[]			= "Memmax_MB";
+const char label_poolalloc_mb[]			= "PoolAlloc_MB";
+const char label_poolused_mb[]			= "PoolUsed_MB";
+const char label_poolfailed[]			= "PoolFailed";
+const char label_ulimit_n[]			= "Ulimit-n";
+const char label_maxsock[]			= "Maxsock";
+const char label_maxconn[]			= "Maxconn";
+const char label_hard_maxconn[]			= "Hard_maxconn";
+const char label_currconns[]			= "CurrConns";
+const char label_cumconns[]			= "CumConns";
+const char label_cumreq[]			= "CumReq";
+const char label_maxsslconns[]			= "MaxSslConns";
+const char label_currsslconns[]			= "CurrSslConns";
+const char label_cumsslconns[]			= "CumSslConns";
+const char label_maxpipes[]			= "Maxpipes";
+const char label_pipesused[]			= "PipesUsed";
+const char label_pipesfree[]			= "PipesFree";
+const char label_connrate[]			= "ConnRate";
+const char label_connratelimit[]		= "ConnRateLimit";
+const char label_maxconnrate[]			= "MaxConnRate";
+const char label_sessrate[]			= "SessRate";
+const char label_sessratelimit[]		= "SessRateLimit";
+const char label_maxsessrate[]			= "MaxSessRate";
+const char label_sslrate[]			= "SslRate";
+const char label_sslratelimit[]			= "SslRateLimit";
+const char label_maxsslrate[]			= "MaxSslRate";
+const char label_sslfrontendkeyrate[]		= "SslFrontendKeyRate";
+const char label_sslfrontendmaxkeyrate[]	= "SslFrontendMaxKeyRate";
+const char label_sslfrontendsessionreuse_pct[]	= "SslFrontendSessionReuse_pct";
+const char label_sslbackendkeyrate[]		= "SslBackendKeyRate";
+const char label_sslbackendmaxkeyrate[]		= "SslBackendMaxKeyRate";
+const char label_sslcachelookups[]		= "SslCacheLookups";
+const char label_sslcachemisses[]		= "SslCacheMisses";
+const char label_compressbpsin[]		= "CompressBpsIn";
+const char label_compressbpsout[]		= "CompressBpsOut";
+const char label_compressbpsratelim[]		= "CompressBpsRateLim";
+const char label_zlibmemusage[]			= "ZlibMemUsage";
+const char label_maxzlibmemusage[]		= "MaxZlibMemUsage";
+const char label_tasks[]			= "Tasks";
+const char label_run_queue[]			= "Run_queue";
+const char label_idle_pct[]			= "Idle_pct";
+const char label_stopping[]			= "Stopping";
+const char label_jobs[]				= "Jobs";
+const char label_listeners[]			= "Listeners";
+
+const char *string_labels[] = {
+	label_version,
+	label_uptime,
+	label_release_date,
+	label_node,
+	label_name
+};
+
+const char *integer_labels[] = {
+	label_ulimit_n,
+	label_stopping,
+	label_process_num,
+	label_pid
+};
+
+const char *counter_labels[] = {
+	label_uptime_sec,
+	label_sslcachemisses,
+	label_sslcachelookups,
+	label_cumsslconns,
+	label_cumreq,
+	label_cumconns,
+	label_compressbpsout,
+	label_compressbpsin
+};
+
+const char *gauge_labels[] = {
+	label_zlibmemusage,
+	label_tasks,
+	label_sslratelimit,
+	label_sslrate,
+	label_sslfrontendsessionreuse_pct,
+	label_sslfrontendmaxkeyrate,
+	label_sslfrontendkeyrate,
+	label_sslbackendmaxkeyrate,
+	label_sslbackendkeyrate,
+	label_sessratelimit,
+	label_sessrate,
+	label_run_queue,
+	label_poolused_mb,
+	label_poolfailed,
+	label_poolalloc_mb,
+	label_pipesused,
+	label_pipesfree,
+	label_nbthread,
+	label_nbproc,
+	label_memmax_mb,
+	label_maxzlibmemusage,
+	label_maxsslrate,
+	label_maxsslconns,
+	label_maxsock,
+	label_maxsessrate,
+	label_maxpipes,
+	label_maxconnrate,
+	label_maxconn,
+	label_listeners,
+	label_jobs,
+	label_idle_pct,
+	label_hard_maxconn,
+	label_currsslconns,
+	label_currconns,
+	label_connratelimit,
+	label_connrate,
+	label_compressbpsratelim
+};
+
+// Reorder entries in this table freely.
+const oid swizzle_table[] = {
+	COMPUTED_LAST_POLLED,
+	COMPUTED_UPDATE_INTERVAL,
+	COMPUTED_LAST_ERROR,
+	STRING_NAME,
+	STRING_VERSION,
+	STRING_RELEASE_DATE,
+	STRING_UPTIME,
+	COUNTER_UPTIME_SEC,
+	STRING_NODE,
+	INTEGER_ULIMIT_N,
+	INTEGER_STOPPING,
+	INTEGER_PID,
+	INTEGER_PROCESS_NUM,
+	GAUGE_NBTHREAD,
+	GAUGE_NBPROC,
+	COUNTER_SSLCACHEMISSES,
+	COUNTER_SSLCACHELOOKUPS,
+	COUNTER_CUMSSLCONNS,
+	GAUGE_CURRSSLCONNS,
+	GAUGE_MAXSSLRATE,
+	GAUGE_MAXSSLCONNS,
+	GAUGE_SSLRATELIMIT,
+	GAUGE_SSLRATE,
+	GAUGE_SSLFRONTENDSESSIONREUSE_PCT,
+	GAUGE_SSLFRONTENDMAXKEYRATE,
+	GAUGE_SSLFRONTENDKEYRATE,
+	GAUGE_SSLBACKENDMAXKEYRATE,
+	GAUGE_SSLBACKENDKEYRATE,
+	GAUGE_SESSRATELIMIT,
+	GAUGE_SESSRATE,
+	GAUGE_MAXSESSRATE,
+	GAUGE_MAXCONNRATE,
+	GAUGE_MAXCONN,
+	COUNTER_CUMCONNS,
+	COUNTER_CUMREQ,
+	GAUGE_CURRCONNS,
+	GAUGE_CONNRATELIMIT,
+	GAUGE_CONNRATE,
+	GAUGE_COMPRESSBPSRATELIM,
+	COUNTER_COMPRESSBPSOUT,
+	COUNTER_COMPRESSBPSIN,
+	GAUGE_ZLIBMEMUSAGE,
+	GAUGE_MAXZLIBMEMUSAGE,
+	GAUGE_TASKS,
+	GAUGE_RUN_QUEUE,
+	GAUGE_POOLUSED_MB,
+	GAUGE_POOLFAILED,
+	GAUGE_POOLALLOC_MB,
+	GAUGE_PIPESUSED,
+	GAUGE_PIPESFREE,
+	GAUGE_MEMMAX_MB,
+	GAUGE_MAXSOCK,
+	GAUGE_MAXPIPES,
+	GAUGE_LISTENERS,
+	GAUGE_JOBS,
+	GAUGE_IDLE_PCT,
+	GAUGE_HARD_MAXCONN
+};
+
+const char cmd_show_info[] = "show info\n";
+
+// Global state
+static char      buffer[1024];
+static uint64_t  last_error;
+static time_t    last_updated;
+static uint64_t  update_interval;
+static char     *string_values[STRING_LABELS];
+static size_t    string_value_lengths[STRING_LABELS];
+static int32_t   integer_values[INTEGER_LABELS];
+static uint32_t  counter_values[COUNTER_LABELS];
+static uint32_t  gauge_values[GAUGE_LABELS];
+
+// Prototypes
+static int yyfill (size_t, int, char **, char **, char **, char **);
+static void l7_parse ();
+static void l7_parse_row (int, char*, char*, char*, char*);
+static void l7_parse_string (uint32_t, int, char*, char*, char*, char*);
+static void l7_parse_integer (uint32_t, int, char*, char*, char*, char*);
+static int handle_l7info (netsnmp_mib_handler *, netsnmp_handler_registration *, netsnmp_agent_request_info *, netsnmp_request_info *);
+void init_l7info (void);
+
+// Functions
+static int yyfill (size_t needed, int fd, char **token, char **marker, char **cursor, char **limit) {
+	// Discard any consumed bytes at the start of the buffer
+	size_t consumed = *marker - buffer;
+	if (consumed > 0) {
+		memmove (buffer, *marker, *limit - *marker);
+		*cursor -= consumed;
+		*token -= consumed;
+		*marker -= consumed;
+		*limit -= consumed;
+	}
+
+	// Fill any free bytes at the end of the buffer
+	size_t used = *limit - buffer,
+	       free = sizeof buffer - used;
+	if (free >= needed) {
+		ssize_t bytes = read (fd, *limit, free);
+		if (bytes > 0) {
+			*limit += bytes;
+			if (bytes < free) {
+				memset (*limit, 0, free - bytes);
+			}
+		} else if (bytes == 0) {
+			last_error = ERR_EOF;
+			return 1;
+		} else {
+			last_error = ERR_IO;
+			return 1;
+		}
+	} else {
+		return 1;
+	}
+	return 0;
+}
+
+static void l7_parse () {
+	const struct sockaddr_un addr = {
+		.sun_family = AF_UNIX,
+		.sun_path = "/var/run/haproxy.stat"
+	};
+
+	const time_t now = time (NULL);
+	if (now - last_updated < update_interval) {
+		return;
+	}
+
+	last_updated = now;
+
+	int fd;
+
+	if ((fd = socket (AF_UNIX, SOCK_STREAM, 0)) == -1) {
+		last_error = ERR_CANNOT_CONNECT_SOCKET;
+		return;
+	}
+
+	if (connect (fd, (const struct sockaddr*) &addr, sizeof (struct sockaddr_un)) == -1) {
+		close (fd);
+		last_error = ERR_CANNOT_CONNECT_CONNECT;
+		return;
+	}
+
+	if (write (fd, cmd_show_info, sizeof cmd_show_info) == sizeof cmd_show_info) {
+		l7_parse_row (fd, buffer, buffer, buffer, buffer);
+	} else {
+		last_error = ERR_IO;
+	}
+
+	if (close (fd)) {
+		last_error = ERR_IO;
+	}
+}
+
+static void l7_parse_string (uint32_t id, int fd, char *token, char *marker, char *cursor, char *limit) {
+	for (;;) { // Consume whitespace
+		token = cursor;
+		/*!re2c
+		[\t ] { continue; }
+		''   { break; }
+ 		*/
+	}
+	token = cursor; // Note this is outside the loop, we want a multi-character match
+	for (;;) { // Parse the label
+		/*!re2c
+		[^\n] { continue; }
+		''    { break; }
+		*/
+	}
+	size_t new_length = cursor - token;
+	if (new_length != string_value_lengths [id] || strncmp (string_values [id], token, new_length) != 0) {
+		// Value has changed.
+		if (string_values [id]) {
+			// Free previous value.
+			free (string_values [id]);
+		}
+		string_values [id] = strndup (token, new_length);
+		string_value_lengths [id] = new_length;
+		DEBUGMSGTL(("l7info:info", "%s:%d: setting %d (%s) to \"%s\"\n", __func__, __LINE__, id, string_labels [id], string_values [id]));
+	}
+	for (;;) { // Parse the EOF
+		token = cursor;
+		/*!re2c
+		'\n'  { break; }
+		''    { last_error = ERR_EXPECTED_EOL_AFTER_STRING; return; }
+		*/
+	}
+
+	return l7_parse_row (fd, token, marker, cursor, limit);
+}
+
+static void l7_parse_counter (uint32_t id, int fd, char *token, char *marker, char *cursor, char *limit) {
+	for (;;) { // Consume whitespace
+		token = cursor;
+		/*!re2c
+		[\t ] { continue; }
+		''    { break; }
+ 		*/
+	}
+	uint32_t i = 0;
+	for (;;) { // Parse the counter
+		token = cursor;
+		/*!re2c
+		[0-9] { i = (yych - '0') + (i * 10); }
+		''    { break; }
+ 		*/
+	}
+	counter_values [id] = i;
+	DEBUGMSGTL(("l7info:info", "%s:%d: setting %d (%s) to %d\n", __func__, __LINE__, id, counter_labels [id], counter_values [id]));
+	for (;;) { // Parse any whitespace and the EOF
+		token = cursor;
+		/*!re2c
+		[\t ] { continue;}
+		'\n'  { break; }
+		''    { last_error = ERR_EXPECTED_EOL_AFTER_INTEGER; return; }
+ 		*/
+	}
+
+	return l7_parse_row (fd, token, marker, cursor, limit);
+}
+
+static void l7_parse_gauge (uint32_t id, int fd, char *token, char *marker, char *cursor, char *limit) {
+	for (;;) { // Consume whitespace
+		token = cursor;
+		/*!re2c
+		[\t ] { continue; }
+		''    { break; }
+ 		*/
+	}
+	uint32_t i = 0;
+	for (;;) { // Parse the gauge
+		token = cursor;
+		/*!re2c
+		[0-9] { i = (yych - '0') + (i * 10); }
+		''    { break; }
+ 		*/
+	}
+	gauge_values [id] = i;
+	DEBUGMSGTL(("l7info:info", "%s:%d: setting %d (%s) to %u\n", __func__, __LINE__, id, gauge_labels [id], gauge_values [id]));
+	for (;;) { // Parse any whitespace and the EOF
+		token = cursor;
+		/*!re2c
+		[\t ] { continue;}
+		'\n'  { break; }
+		''    { last_error = ERR_EXPECTED_EOL_AFTER_INTEGER; return; }
+ 		*/
+	}
+
+	return l7_parse_row (fd, token, marker, cursor, limit);
+}
+
+static void l7_parse_integer (uint32_t id, int fd, char *token, char *marker, char *cursor, char *limit) {
+	for (;;) { // Consume whitespace
+		token = cursor;
+		/*!re2c
+		[\t ] { continue; }
+		''    { break; }
+ 		*/
+	}
+	int32_t i = 0;
+	for (;;) { // Parse the integer
+		token = cursor;
+		/*!re2c
+		[0-9] { i = (yych - '0') + (i * 10); }
+		''    { break; }
+ 		*/
+	}
+	integer_values [id] = i;
+	DEBUGMSGTL(("l7info:info", "%s:%d: setting %d (%s) to %d\n", __func__, __LINE__, id, integer_labels [id], integer_values [id]));
+	for (;;) { // Parse any whitespace and the EOF
+		token = cursor;
+		/*!re2c
+		[\t ] { continue;}
+		'\n'  { break; }
+		''    { last_error = ERR_EXPECTED_EOL_AFTER_INTEGER; return; }
+ 		*/
+	}
+
+	return l7_parse_row (fd, token, marker, cursor, limit);
+}
+
+static void l7_parse_row (int fd, char *token, char *marker, char *cursor, char *limit) {
+	for (;;) { // If we encounter a blank line stop parsing, we're at EOF
+		token = cursor;
+		/*!re2c
+		'\n' { last_error = ERR_OKAY; return; }
+		''   { break; }
+ 		*/
+	}
+	token = cursor; // Note this is outside the loop, we want a multi-character match
+	for (;;) { // Parse the label
+		/*!re2c
+		':'        { break; }
+		[-a-zA-Z_] { continue; }
+		''         { last_error = ERR_EXPECTED_COLON_AFTER_LABEL; return; }
+		*/
+	}
+	*(cursor-1) = 0;
+	DEBUGMSGTL(("l7info:debug", "%s:%d: read a label: \"%s\"\n", __func__, __LINE__, token));
+
+	for (uint32_t string_id = 0; string_id < STRING_LABELS; ++string_id) {
+		if (strncmp (token, string_labels [string_id], cursor - token - 1)) {
+			continue;
+		}
+		return l7_parse_string (string_id, fd, token, marker, cursor, limit);
+	}
+
+	for (uint32_t integer_id = 0; integer_id < INTEGER_LABELS; ++integer_id) {
+		if (strncmp (token, integer_labels [integer_id], cursor - token - 1)) {
+			continue;
+		}
+		return l7_parse_integer (integer_id, fd, token, marker, cursor, limit);
+	}
+
+	for (uint32_t counter_id = 0; counter_id < COUNTER_LABELS; ++counter_id) {
+		if (strncmp (token, counter_labels [counter_id], cursor - token - 1)) {
+			continue;
+		}
+		return l7_parse_counter (counter_id, fd, token, marker, cursor, limit);
+	}
+
+	for (uint32_t gauge_id = 0; gauge_id < GAUGE_LABELS; ++gauge_id) {
+		if (strncmp (token, gauge_labels [gauge_id], cursor - token - 1)) {
+			continue;
+		}
+		return l7_parse_gauge (gauge_id, fd, token, marker, cursor, limit);
+	}
+
+	last_error = ERR_UNKNOWN_LABEL;
+}
+
+static int handle_l7info (netsnmp_mib_handler *handler, netsnmp_handler_registration *reginfo, netsnmp_agent_request_info *reqinfo, netsnmp_request_info *requests) {
+	oid id = requests->requestvb->name [requests->requestvb->name_length - 2];
+	switch(reqinfo->mode) {
+		case MODE_GET:
+		l7_parse ();
+
+		DEBUGMSGTL(("l7info:handler", "%s:%d: GET instance %lu (mapped to %lu)\n", __func__, __LINE__, id, swizzle_table [id - 1]));
+		oid old_id = id;
+		id = swizzle_table [id - 1];
+
+		if (id < COMPUTED) {
+			DEBUGMSGTL(("l7info:handler", "%s:%d: Responding with computed value %lu\n", __func__, __LINE__, id));
+			switch (id) {
+				case 0:
+				snmp_set_var_typed_integer (
+					requests->requestvb,
+					ASN_TIMETICKS,
+					last_updated * 1000
+				);
+				break;
+
+				case 1:
+				snmp_set_var_typed_integer (
+					requests->requestvb,
+					ASN_UNSIGNED,
+					update_interval * 1000
+				);
+				break;
+
+				case 2:
+				snmp_set_var_typed_integer (
+					requests->requestvb,
+					ASN_UNSIGNED,
+					last_error
+				);
+				break;
+			}
+			return SNMP_ERR_NOERROR;
+		}
+		id -= COMPUTED;
+
+		if (id < STRING_LABELS) {
+			DEBUGMSGTL(("l7info:handler", "%s:%d: Responding with string value %lu\n", __func__, __LINE__, id));
+			snmp_set_var_typed_value (
+				requests->requestvb,
+				ASN_OCTET_STR,
+				(u_char *) string_values [id],
+				string_value_lengths [id]
+			);
+			return SNMP_ERR_NOERROR;
+		}
+		id -= STRING_LABELS;
+
+		if (id < INTEGER_LABELS) {
+			DEBUGMSGTL(("l7info:handler", "%s:%d: Responding with integer value %lu\n", __func__, __LINE__, id));
+			if (old_id == INTEGER_STOPPING) {
+				// Special-case for TruthValue
+				snmp_set_var_typed_integer (
+					requests->requestvb,
+					ASN_INTEGER,
+					integer_values [id] ? 1 : 2
+				);
+			} else {
+				snmp_set_var_typed_integer (
+					requests->requestvb,
+					ASN_INTEGER,
+					integer_values [id]
+				);
+			}
+			return SNMP_ERR_NOERROR;
+		}
+		id -= INTEGER_LABELS;
+
+		if (id < COUNTER_LABELS) {
+			DEBUGMSGTL(("l7info:handler", "%s:%d: Responding with counter value %lu (%u)\n", __func__, __LINE__, id, counter_values [id]));
+			snmp_set_var_typed_integer (
+				requests->requestvb,
+				ASN_COUNTER,
+				counter_values [id]
+			);
+			return SNMP_ERR_NOERROR;
+		}
+		id -= COUNTER_LABELS;
+
+		if (id < GAUGE_LABELS) {
+			DEBUGMSGTL(("l7info:handler", "%s:%d: Responding with gauge value %lu\n", __func__, __LINE__, id));
+			snmp_set_var_typed_integer (
+				requests->requestvb,
+				ASN_UNSIGNED,
+				gauge_values [id]
+			);
+			return SNMP_ERR_NOERROR;
+		}
+
+		/* we should never get here, so this is a really bad error */
+		DEBUGMSGTL(("l7info:handler", "%s:%d: scalar unknown\n", __func__, __LINE__));
+		return SNMP_ERR_GENERR;
+	}
+
+	/* we should never get here, so this is a really bad error */
+	DEBUGMSGTL(("l7info:handler", "%s:%d: unknown mode\n", __func__, __LINE__));
+	return SNMP_ERR_GENERR;
+}
+
+void init_l7info (void) {
+	const oid l7info_oid[] = { 1,3,6,1,4,1,54849,1,1 };
+
+	DEBUGMSGTL(("l7info:info", "%s:%d: Initializing\n", __func__, __LINE__));
+
+	last_error      = ERR_OKAY;
+	last_updated    = 0;
+	update_interval = 4;
+
+	assert ((sizeof swizzle_table / sizeof *swizzle_table) == COMPUTED + STRING_LABELS + INTEGER_LABELS + COUNTER_LABELS + GAUGE_LABELS);
+
+	for (uint32_t string_id = 0; string_id < STRING_LABELS; ++string_id) {
+		string_values [string_id] = NULL;
+		string_value_lengths [string_id] = 0;
+	}
+	for (uint32_t integer_id = 0; integer_id < INTEGER_LABELS; ++integer_id) {
+		integer_values [integer_id] = 0;
+	}
+	for (uint32_t counter_id = 0; counter_id < COUNTER_LABELS; ++counter_id) {
+		counter_values [counter_id] = 0;
+	}
+	for (uint32_t gauge_id = 0; gauge_id < GAUGE_LABELS; ++gauge_id) {
+		gauge_values [gauge_id] = 0;
+	}
+
+	netsnmp_register_scalar_group (
+		netsnmp_create_handler_registration (
+			"l7info", handle_l7info,
+			l7info_oid, OID_LENGTH (l7info_oid),
+			HANDLER_CAN_RONLY
+		), 1, COMPUTED + INTEGER_LABELS + COUNTER_LABELS + GAUGE_LABELS + STRING_LABELS
+	);
+}
+
+/* vim: set filetype=c: */

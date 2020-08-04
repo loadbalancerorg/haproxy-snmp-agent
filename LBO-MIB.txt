@@ -1,0 +1,41 @@
+--  _    ___   ___  ___  ___                   --
+-- | |  | _ ) / _ \| _ \/ __|                  --
+-- | |__| _ \| (_) |   / (_ |                  --
+-- |____|___(_)___/|_|_\\___|                  --
+--       Loadbalancer.org MIB                  --
+-- Copyright (c) 2020 Loadbalancer.org Ltd.    --
+--                                             --
+-- 2020-04-13: Peter Statham: Initial release. --
+--                                             --
+
+LBO-MIB DEFINITIONS ::= BEGIN
+
+IMPORTS
+	MODULE-IDENTITY,
+	OBJECT-IDENTITY,
+	enterprises
+			FROM SNMPv2-SMI;
+
+loadBalancerOrg MODULE-IDENTITY
+	LAST-UPDATED	"202004130000Z"
+	ORGANIZATION	"Loadbalancer.org Ltd."
+	CONTACT-INFO	"Loadbalancer.org Ltd.
+			 Compass House
+			 North Harbour Business Park
+			 Portsmouth, PO6 4PS
+			 England, UK
+
+			 +44 (0)330 380 1064
+			 snmp@loadbalancer.org"
+	DESCRIPTION	"Loadbalancer.org MIB"
+	REVISION	"202004130000Z"
+	DESCRIPTION	"Initial release."
+::= { enterprises 54849 }
+
+lboExperimental OBJECT-IDENTITY
+	STATUS		current
+	DESCRIPTION	"Experimental subtree.  Nothing under this branch
+			 should be considered stable."
+::= { loadBalancerOrg 1 }
+
+END
