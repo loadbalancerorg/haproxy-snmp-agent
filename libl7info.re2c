@@ -600,7 +600,7 @@ static int handle_l7info (netsnmp_mib_handler *handler, netsnmp_handler_registra
 				case 1:
 				snmp_set_var_typed_integer (
 					requests->requestvb,
-					ASN_UNSIGNED,
+					ASN_INTEGER,
 					update_interval * 1000
 				);
 				break;
