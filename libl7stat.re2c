@@ -3018,11 +3018,11 @@ static int l7stat_handle_backends (
 			break;
 
 			case BACKEND_ACT:
-			SEND_INTEGER (backend->act);
+			SEND_UNSIGNED (backend->act);
 			break;
 
 			case BACKEND_BCK:
-			SEND_INTEGER (backend->bck);
+			SEND_UNSIGNED (backend->bck);
 			break;
 
 			case BACKEND_CHKDOWN:
